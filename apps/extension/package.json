@@ -1,0 +1,21 @@
+{
+  "name": "@zoneshift/extension",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build && wxt build -b firefox",
+    "build:safari": "wxt build -b safari",
+    "typecheck": "wxt prepare && tsc -p tsconfig.json",
+    "test": "echo \"no extension tests yet\""
+  },
+  "dependencies": {
+    "@zoneshift/core": "workspace:*"
+  },
+  "devDependencies": {
+    "wxt": "^0.21.5"
+  }
+}
