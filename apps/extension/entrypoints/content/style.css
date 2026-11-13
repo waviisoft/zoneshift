@@ -1,0 +1,60 @@
+/* Marker shown after every time Zoneshift recognises. Drawn in CSS so it
+   needs no image and survives strict page content-security policies. */
+.zoneshift-icon {
+  all: unset;
+  box-sizing: content-box;
+  display: inline-block;
+  position: relative;
+  width: 0.7em;
+  height: 0.7em;
+  margin-left: 0.3em;
+  border: 0.1em solid currentColor;
+  border-radius: 50%;
+  vertical-align: -0.08em;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.zoneshift-icon::before,
+.zoneshift-icon::after {
+  content: '';
+  position: absolute;
+  background: currentColor;
+  border-radius: 0.05em;
+}
+/* minute hand */
+.zoneshift-icon::before {
+  left: calc(50% - 0.05em);
+  top: 12%;
+  width: 0.1em;
+  height: 44%;
+}
+/* hour hand */
+.zoneshift-icon::after {
+  left: calc(50% - 0.05em);
+  top: calc(50% - 0.05em);
+  width: 36%;
+  height: 0.1em;
+}
+.zoneshift-icon:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+/* Converted: solid, coloured. */
+.zoneshift[data-zs-state='converted'] > .zoneshift-icon {
+  color: #fff;
+  background: #2563eb;
+  border-color: #2563eb;
+}
+.zoneshift[data-zs-state='converted'][data-zs-confidence='low'] > .zoneshift-icon {
+  background: #d97706;
+  border-color: #d97706;
+}
+/* Showing the original, conversion available: hollow, muted. */
+.zoneshift[data-zs-state='original'] > .zoneshift-icon {
+  opacity: 0.55;
+}
+.zoneshift[data-zs-state='original'] > .zoneshift-icon:hover {
+  opacity: 1;
+}

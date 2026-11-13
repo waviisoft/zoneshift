@@ -36,6 +36,8 @@ export interface Conversion {
   flags: Flag[];
   /** Other plausible readings that yield a different instant. */
   alternatives: Alternative[];
+  /** 'iso' for machine-style timestamps (2026-11-13T01:30:00Z), 'text' for prose. */
+  format: 'iso' | 'text';
   /** For time-only text: target date minus source date, in days (-1, 0 or 1). */
   dayShift: number;
 }

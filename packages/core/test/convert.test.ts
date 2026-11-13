@@ -42,6 +42,11 @@ describe('date and time together', () => {
     expect(la('2026-11-13 01:30 UTC')).toBe('2026-11-12 17:30 PST');
   });
 
+  it('labels machine-style timestamps so callers can treat them differently', () => {
+    const formats = (text: string) => findConversions(text, { targetZone: LA, now: NOW }).map((c) => c.format);
+    expect(formats('2026-11-13T01:30:00Z and Nov 13, 2026 1:30 AM UTC')).toEqual(['iso', 'text']);
+  });
+
   it('shifts a lone weekday', () => {
     expect(la('Friday at 1:30 AM UTC')).toBe('Thursday at 5:30 PM PST');
   });

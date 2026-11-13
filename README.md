@@ -7,8 +7,9 @@ your own time zone.
 `Thursday, November 12, 2026, at 5:30 PM PST` for a reader in Los Angeles.
 
 **Status: early development.** The conversion engine works and is tested. The
-extension itself is a placeholder that converts text at page load and shows the
-original in a tooltip. See [docs/design.md](docs/design.md) for the full design
+extension marks each recognised time with a clock icon, converts prose times,
+and offers conversion for log and ISO 8601 timestamps; settings and the
+feedback flow are not built yet. See [docs/design.md](docs/design.md) for the full design
 and roadmap.
 
 ## Principles

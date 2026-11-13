@@ -58,18 +58,32 @@
 
 ## Decoration and popover
 
-- Converted text: dotted underline and a small clock glyph. Low-confidence and
-  assumed-zone conversions get distinct styles.
+- Every recognised time gets a small clock icon after it. The icon is the
+  only decoration: the text itself is never underlined or restyled, so it
+  cannot clash with the site's own styling. The icon is drawn in CSS (no image)
+  and takes the surrounding text size.
+  - Solid blue: converted. Solid orange: converted, low confidence.
+  - Hollow, muted: recognised but left as written; conversion on request.
+- Prose times are converted immediately. Timestamps in code and log blocks
+  (`code`, `pre`, `samp`, `kbd`) and ISO 8601 timestamps anywhere are left as
+  written until the reader asks, because they are often copied or compared.
+- The popover can switch one time, or every time on the page in either
+  direction. A page-wide choice also applies to content added afterwards.
+  Remembering that choice per site belongs with settings.
 - Tap or click (never hover-only, so it works on touch) opens a popover in a
   shadow root:
   - original text and how it was read;
-  - alternative readings, one tap to switch;
-  - **Show original here**: revert this one instance in place;
-  - **This is wrong**: wrong zone, not a date/time, wrong date, day/month
-    swapped, other, plus free text.
-- Text nodes on framework-rendered pages can be overwritten or cause hydration
-  errors. A `MutationObserver` re-applies conversions; a fallback mode leaves
-  the text untouched and shows the conversion only in the popover.
+  - alternative readings, one tap to switch (not built yet);
+  - **Show original here** / **Convert to local time** for this one instance;
+  - **Convert all times on this page** / **Show all originals on this page**;
+  - **This is wrong** (not built yet): wrong zone, not a date/time, wrong
+    date, day/month swapped, other, plus free text.
+- A `MutationObserver` annotates content added after load. Framework-rendered
+  pages can still overwrite or object to changed text nodes; the planned
+  fallback leaves the text untouched and shows the conversion only in the
+  popover.
+- A timestamp split across several elements (syntax-highlighted logs) is not
+  recognised yet.
 
 ## Feedback
 
@@ -112,8 +126,10 @@ The extension itself makes no network requests.
 
 1. Scaffold: repo, CI, extension skeleton. **Done.**
 2. Core engine and test corpus. **Started**: see "Not handled yet".
-3. Annotator on desktop Chromium and Firefox: dynamic pages, `<time>`
-   elements, decoration, popover, show-original.
+3. Annotator on desktop Chromium and Firefox. **Started**: icon marker,
+   popover, per-item and page-wide switching, late-added content. Remaining:
+   `<time>` elements, alternative readings, split timestamps, framework
+   fallback.
 4. Settings and feedback flow.
 5. Safari on macOS, then iOS.
 6. Store releases and automated packaging.

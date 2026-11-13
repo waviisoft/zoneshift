@@ -362,6 +362,7 @@ export function findConversions(text: string, options: ConvertOptions = {}): Con
       confidence: flags.includes('ambiguous-zone') || flags.includes('season-mismatch') ? 'low' : 'high',
       flags,
       alternatives,
+      format: c.parts.some((p) => p.type === 'monnum') ? 'iso' : 'text',
       dayShift: rendered.dayShift,
     });
   }
