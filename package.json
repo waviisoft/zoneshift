@@ -10,7 +10,8 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "build": "pnpm --filter @zoneshift/extension build",
-    "dev": "pnpm --filter @zoneshift/extension dev"
+    "dev": "pnpm --filter @zoneshift/extension dev",
+    "e2e": "pnpm --filter @zoneshift/extension build:chrome && pnpm --filter @zoneshift/extension e2e"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

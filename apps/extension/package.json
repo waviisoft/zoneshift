@@ -10,12 +10,17 @@
     "build": "wxt build && wxt build -b firefox",
     "build:safari": "wxt build -b safari",
     "typecheck": "wxt prepare && tsc -p tsconfig.json",
-    "test": "echo \"no extension tests yet\""
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "build:chrome": "wxt build"
   },
   "dependencies": {
     "@zoneshift/core": "workspace:*"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "happy-dom": "^21.0.4",
+    "vitest": "^5.1.0",
     "wxt": "^0.21.5"
   }
 }

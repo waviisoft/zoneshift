@@ -46,6 +46,15 @@ pnpm test
 pnpm build
 ```
 
+```bash
+pnpm e2e
+```
+
+`pnpm test` runs the unit tests for the engine and the page annotator.
+`pnpm e2e` builds the Chrome extension and drives it in Chromium with
+Playwright; run `pnpm --filter @zoneshift/extension exec playwright install chromium`
+once first.
+
 `pnpm build` writes unpacked extensions to `apps/extension/.output/chrome-mv3`
 and `apps/extension/.output/firefox-mv2`. `pnpm dev` starts a browser with the
 extension loaded and live reload.
