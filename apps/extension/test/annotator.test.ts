@@ -375,6 +375,18 @@ describe('popover', () => {
     expect(popover()).toBeNull();
   });
 
+  it('is a modal dialog while open, since Tab stays inside it', () => {
+    click(icon(marks()[0]!));
+    expect(popover()!.shadowRoot!.querySelector('[role="dialog"]')!.getAttribute('aria-modal')).toBe('true');
+  });
+
+  it('closes when the page removes the time', async () => {
+    click(icon(marks()[0]!));
+    document.querySelector('p')!.remove();
+    await Promise.resolve();
+    expect(popover()).toBeNull();
+  });
+
   it('closes on Escape and on a click elsewhere', () => {
     click(icon(marks()[0]!));
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -529,6 +541,180 @@ describe('editable content', () => {
     document.getElementById('ed')!.append(document.getElementById('p')!);
     await Promise.resolve();
     expect(document.getElementById('ed')!.innerHTML).toBe('<p id="p">Meet at 1:30 AM UTC.</p>');
+  });
+});
+
+describe('copies of annotated markup', () => {
+  const settle = async () => {
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(MUTATION_DELAY + 50);
+  };
+  beforeEach(() => vi.useFakeTimers());
+
+  it('records on each mark the text it replaced', () => {
+    load('<p>At 1:30 AM UTC.</p>');
+    expect(marks()[0]!.getAttribute('data-zs-original')).toBe('1:30 AM UTC');
+  });
+
+  it('edit, cancel from a snapshot, edit, save: the saved HTML is the original', async () => {
+    load('<div id="e"><p>Meeting at 1:30 AM UTC.</p></div>');
+    const e = document.getElementById('e')!;
+    // A click-to-edit that keeps a snapshot for Cancel, taken in the same task.
+    e.contentEditable = 'true';
+    const snapshot = e.innerHTML;
+    expect(snapshot).toContain('zoneshift');
+    await settle();
+    // Cancel: the snapshot comes back, then editing ends.
+    e.innerHTML = snapshot;
+    e.contentEditable = 'false';
+    await settle();
+    // Shown converted again, with a working icon that follows the page-wide choice.
+    expect(shown()).toEqual(['converted: 5:30 PM PST (−1 day)']);
+    annotator.setAll('original');
+    expect(e.textContent).toBe('Meeting at 1:30 AM UTC.');
+    annotator.setAll('converted');
+    // Edit again, then Save.
+    e.contentEditable = 'true';
+    await settle();
+    expect(e.innerHTML).toBe('<p>Meeting at 1:30 AM UTC.</p>');
+  });
+
+  it('a snapshot put back while still editing becomes plain original text and stays so', async () => {
+    load('<div id="e"><p>Meeting at 1:30 AM UTC.</p></div>');
+    const e = document.getElementById('e')!;
+    const snapshot = e.innerHTML;
+    e.contentEditable = 'true';
+    await settle();
+    e.innerHTML = snapshot;
+    await settle();
+    expect(e.innerHTML).toBe('<p>Meeting at 1:30 AM UTC.</p>');
+  });
+
+  it('a cloned time (carousel loop, template copy) gets a working icon', async () => {
+    load('<div id="slide"><p>Kick-off 1:30 AM UTC</p></div>');
+    const copy = document.getElementById('slide')!.cloneNode(true) as HTMLElement;
+    copy.id = 'copy';
+    document.body.append(copy);
+    await settle();
+    const i = copy.querySelector<HTMLElement>('.zoneshift-icon')!;
+    i.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+    expect(popover()).not.toBeNull();
+    popoverButton('Show all originals on this page').click();
+    expect(copy.textContent).toBe('Kick-off 1:30 AM UTC');
+    expect(document.getElementById('slide')!.textContent).toBe('Kick-off 1:30 AM UTC');
+  });
+
+  it('a pasted mark in an editor becomes the original text', async () => {
+    load('<p id="src">At 1:30 AM UTC.</p><div id="ed" contenteditable="true"></div>');
+    const ed = document.getElementById('ed')!;
+    ed.append(marks()[0]!.cloneNode(true));
+    // A stray part of a mark: shown text kept as text, icon dropped.
+    ed.insertAdjacentHTML('beforeend', ' <zoneshift-text>5:30 PM</zoneshift-text><zoneshift-icon></zoneshift-icon>');
+    await settle();
+    expect(ed.innerHTML).toBe('1:30 AM UTC 5:30 PM');
+  });
+
+  it('a copy edited inside keeps its other content, with the time as written', async () => {
+    load('<p id="p">At 1:30 AM UTC.</p>');
+    const copy = document.querySelector('zoneshift-run')!.cloneNode(true) as Element;
+    copy.append(document.createElement('br'));
+    const ed = document.createElement('div');
+    ed.contentEditable = 'true';
+    ed.append(copy);
+    document.body.append(ed);
+    await settle();
+    expect(ed.innerHTML).toBe('At 1:30 AM UTC.<br>');
+  });
+
+  it('settles after a copy is put back, without further changes of its own', async () => {
+    load('<div id="slide"><p>Kick-off 1:30 AM UTC</p></div>');
+    const snapshot = document.getElementById('slide')!.innerHTML;
+    let changes = 0;
+    const counter = new MutationObserver((r) => (changes += r.length));
+    counter.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true });
+    document.getElementById('slide')!.innerHTML = snapshot;
+    await settle();
+    await settle();
+    const settled = changes;
+    await settle();
+    await settle();
+    counter.disconnect();
+    expect(changes).toBe(settled);
+    expect(marks()).toHaveLength(1);
+  });
+
+  it('stopping removes copies as well', () => {
+    load('<div id="slide"><p>Kick-off 1:30 AM UTC</p></div>');
+    document.body.insertAdjacentHTML('beforeend', document.getElementById('slide')!.innerHTML);
+    stop!();
+    stop = undefined;
+    expect(document.body.innerHTML).toBe('<div id="slide"><p>Kick-off 1:30 AM UTC</p></div><p>Kick-off 1:30 AM UTC</p>');
+  });
+
+  it('puts the caret at the same place in the original text when focus enters an editor', () => {
+    load('<div id="ed"><p>Call at 4:30 AM UTC today.</p></div>');
+    const run = document.querySelector('zoneshift-run')!;
+    // After "Call " in the text before the time, and inside the converted time.
+    getSelection()!.setBaseAndExtent(run.firstChild!, 5, run.querySelector('zoneshift-text')!.firstChild!, 0);
+    const ed = document.getElementById('ed')!;
+    ed.contentEditable = 'true';
+    ed.dispatchEvent(new FocusEvent('focusin', { bubbles: true, composed: true }));
+    const sel = getSelection()!;
+    expect(sel.anchorNode).toBe(ed.querySelector('p')!.firstChild);
+    expect([sel.anchorOffset, sel.focusOffset]).toEqual([5, 8]);
+  });
+});
+
+describe('copying', () => {
+  const copy = (type = 'copy') => {
+    const event = new ClipboardEvent(type, { clipboardData: new DataTransfer(), bubbles: true, cancelable: true });
+    document.dispatchEvent(event);
+    return event;
+  };
+  const select = (el: Node) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+  };
+
+  it('puts the text as shown on the clipboard, without Zoneshift elements', () => {
+    load('<p id="p">Starts <b>Friday</b> at 1:30 AM UTC sharp.</p>');
+    select(document.getElementById('p')!);
+    const event = copy();
+    expect(event.defaultPrevented).toBe(true);
+    expect(event.clipboardData!.getData('text/html')).toBe('Starts <b>Friday</b> at 5:30 PM PST (−1 day) sharp.');
+    expect(event.clipboardData!.getData('text/plain')).toBe('Starts Friday at 5:30 PM PST (−1 day) sharp.');
+  });
+
+  it('leaves copying alone when nothing selected was annotated', () => {
+    load('<p id="a">No times here.</p><p>At 1:30 AM UTC.</p>');
+    select(document.getElementById('a')!);
+    const event = copy();
+    expect(event.defaultPrevented).toBe(false);
+    expect(event.clipboardData!.getData('text/html')).toBe('');
+  });
+
+  it('steps aside when the site has set the clipboard itself', () => {
+    load('<p id="p">At 1:30 AM UTC.</p>');
+    select(document.getElementById('p')!);
+    const site = (e: Event) => {
+      (e as ClipboardEvent).clipboardData!.setData('text/plain', 'site');
+      e.preventDefault();
+    };
+    document.addEventListener('copy', site);
+    const event = copy();
+    document.removeEventListener('copy', site);
+    expect(event.clipboardData!.getData('text/plain')).toBe('site');
+    expect(event.clipboardData!.getData('text/html')).toBe('');
+  });
+
+  it('does not turn cut into copy outside editable content', () => {
+    load('<p id="p">At 1:30 AM UTC.</p>');
+    select(document.getElementById('p')!);
+    const event = copy('cut');
+    expect(event.defaultPrevented).toBe(false);
+    expect(event.clipboardData!.getData('text/html')).toBe('');
   });
 });
 

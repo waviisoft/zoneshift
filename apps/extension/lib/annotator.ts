@@ -45,6 +45,10 @@ export const MARK_TAG = 'zoneshift-mark';
 export const TEXT_TAG = 'zoneshift-text';
 export const ICON_TAG = 'zoneshift-icon';
 const POPOVER_TAG = 'zoneshift-popover';
+/** Elements that may turn up as copies of the annotator's own (cloned, pasted, restored from a snapshot). */
+const COPYABLE = `${RUN_TAG}, ${MARK_TAG}, ${TEXT_TAG}, ${ICON_TAG}`;
+/** On each mark: the text it replaced, so any copy of it can be turned back into the original. */
+const ORIGINAL_ATTR = 'data-zs-original';
 const OWN_PREFIX = 'zoneshift-';
 
 const XHTML = 'http://www.w3.org/1999/xhtml';
@@ -127,6 +131,14 @@ const DAY = 86_400_000;
 /** "5:30 PM PST (−1 day)" → "5:30 PM PST". */
 const withoutDayShift = (converted: string) => converted.replace(/\s*\([+\u2212-]\d+ days?\)$/u, '');
 
+function isModal(dialog: Element): boolean {
+  try {
+    return dialog.matches(':modal');
+  } catch {
+    return false; // a browser without :modal
+  }
+}
+
 const readingsOf = (conversions: Conversion[]) =>
   conversions.map((c) => `${c.index}:${c.length}:${c.epochMs}`).join(',');
 
@@ -144,6 +156,12 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
   /** Set once the reader picks "all on this page"; applied to content added later. */
   let pageState: State | null = null;
   let popover: { host: HTMLElement; mark: HTMLElement; icon: HTMLElement } | null = null;
+  /**
+   * A press on annotated text: where in the original text it landed, and the
+   * restored text node if the run was put back during the press (a site that
+   * makes content editable on mousedown).
+   */
+  let press: { run: Element; offset: number; text?: Text } | null = null;
 
   const isOwn = (el: Element) => el.localName.startsWith(OWN_PREFIX);
   const designMode = () => doc.designMode === 'on';
@@ -286,6 +304,7 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
   function createMark(c: Conversion, technical: boolean): HTMLElement {
     const mark = doc.createElement(MARK_TAG);
     mark.className = 'zoneshift';
+    mark.setAttribute(ORIGINAL_ATTR, c.original);
     mark.dataset.zsConfidence = c.confidence;
     const text = doc.createElement(TEXT_TAG);
     const icon = doc.createElement(ICON_TAG);
@@ -360,20 +379,157 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
     annotateAll([root]);
   }
 
+  /** Whether an element of ours in the page is one this annotator made and still manages. */
+  function isLive(el: Element): boolean {
+    switch (el.localName) {
+      case RUN_TAG:
+        return runs.has(el);
+      case MARK_TAG:
+        return conversions.has(el) && runs.has(el.parentElement!);
+      case TEXT_TAG:
+      case ICON_TAG:
+        return el.parentElement?.localName === MARK_TAG && isLive(el.parentElement);
+      default:
+        return true;
+    }
+  }
+
+  /** The text a mark replaced; for a mark without the attribute, its visible text. */
+  const markOriginal = (mark: Element) =>
+    mark.getAttribute(ORIGINAL_ATTR) ?? mark.querySelector(TEXT_TAG)?.textContent ?? '';
+
+  /**
+   * Position in a run's original text that corresponds to (node, offset) in
+   * the run as shown. Inside a converted time the position is scaled to the
+   * original's length.
+   */
+  function originalOffset(run: Element, node: Node, offset: number): number {
+    let pos = 0;
+    const children = [...run.childNodes];
+    if (node === run) {
+      for (const child of children.slice(0, offset)) pos += lengthOf(child);
+      return pos;
+    }
+    for (const child of children) {
+      if (child === node) return pos + offset;
+      if (child.contains(node)) {
+        const original = markOriginal(child as Element).length;
+        const shown = (child as Element).querySelector(TEXT_TAG)?.textContent?.length ?? 0;
+        if (node.nodeType !== 3 || !shown) return pos + original;
+        return pos + Math.min(original, Math.round((offset / shown) * original));
+      }
+      pos += lengthOf(child);
+    }
+    return pos;
+  }
+  const lengthOf = (n: Node) =>
+    n.nodeType === 3 ? (n as Text).data.length : n.nodeType === 1 && (n as Element).localName === MARK_TAG ? markOriginal(n as Element).length : 0;
+
+  /**
+   * Replace a run (ours or a copy) with a text node, moving the selection or
+   * caret to the matching place in the restored text.
+   */
+  function replaceRun(run: Element, text: Text): void {
+    const sel = view?.getSelection();
+    const inside = (n: Node | null | undefined) => n != null && run.contains(n);
+    let anchor: number | null = null;
+    let focus: number | null = null;
+    if (sel && sel.rangeCount > 0) {
+      if (inside(sel.anchorNode)) anchor = originalOffset(run, sel.anchorNode!, sel.anchorOffset);
+      if (inside(sel.focusNode)) focus = originalOffset(run, sel.focusNode!, sel.focusOffset);
+    }
+    if (popover && run.contains(popover.mark)) closePopover();
+    if (press?.run === run) press.text = text;
+    run.replaceWith(text);
+    if (sel && (anchor !== null || focus !== null)) {
+      const [an, ao] = anchor !== null ? [text, anchor] : [sel.anchorNode!, sel.anchorOffset];
+      const [fn, fo] = focus !== null ? [text, focus] : [sel.focusNode!, sel.focusOffset];
+      try {
+        sel.setBaseAndExtent(an, ao, fn, fo);
+      } catch {
+        // The other end moved too; leave the selection to the browser.
+      }
+    }
+  }
+
+  /** The text position under a point. */
+  function caretAt(x: number, y: number): { node: Node; offset: number } | null {
+    const d = doc as Document & {
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    if (d.caretPositionFromPoint) {
+      const p = d.caretPositionFromPoint(x, y);
+      return p ? { node: p.offsetNode, offset: p.offset } : null;
+    }
+    const r = d.caretRangeFromPoint?.(x, y);
+    return r ? { node: r.startContainer, offset: r.startOffset } : null;
+  }
+
   /** Swap a run back for the page's own text node. */
   function unwrap(run: Element): void {
     const record = runs.get(run);
     if (!record) return;
     runs.delete(run);
-    if (popover && run.contains(popover.mark)) closePopover();
-    if (run.parentNode) run.replaceWith(record.original);
+    if (run.parentNode) replaceRun(run, record.original);
   }
 
+  /**
+   * Turn a copy of one of our elements (not one this annotator manages) back
+   * into plain original text. Returns the text nodes it left, for annotating again.
+   */
+  function revert(el: Element): Text[] {
+    if (!el.parentNode) return [];
+    switch (el.localName) {
+      case RUN_TAG: {
+        const children = [...el.childNodes];
+        // Unchanged copy: text and marks only, so it becomes one text node again.
+        if (children.every((c) => c.nodeType === 3 || (c.nodeType === 1 && (c as Element).localName === MARK_TAG))) {
+          const text = doc.createTextNode(children.map(lengthlessText).join(''));
+          replaceRun(el, text);
+          return [text];
+        }
+        // Edited inside: keep what is there, with each time back as written.
+        const out: Text[] = [];
+        for (const inner of [...el.querySelectorAll(COPYABLE)]) out.push(...revert(inner));
+        el.replaceWith(...el.childNodes);
+        return out;
+      }
+      case MARK_TAG:
+      case TEXT_TAG: {
+        const text = doc.createTextNode(el.localName === MARK_TAG ? markOriginal(el) : (el.textContent ?? ''));
+        el.replaceWith(text);
+        return [text];
+      }
+      default:
+        el.remove();
+        return [];
+    }
+  }
+  const lengthlessText = (n: Node) => (n.nodeType === 3 ? (n as Text).data : markOriginal(n as Element));
+
+  /** Copies of our elements under `root` (including `root`), outermost only, in document order. */
+  function copiesIn(root: Element): Element[] {
+    const out: Element[] = [];
+    const consider = (el: Element) => {
+      // Document order: anything inside the last copy found comes right after it.
+      const last = out[out.length - 1];
+      if (last?.contains(el) || isLive(el)) return;
+      out.push(el);
+    };
+    if (root.matches(COPYABLE)) consider(root);
+    for (const el of root.querySelectorAll(COPYABLE)) consider(el);
+    return out;
+  }
+
+  /** Put the page's own text back under `root`: our runs, and any copies of them. */
   function restore(root: Node): void {
     if (root.nodeType !== 1 && root.nodeType !== 9) return;
-    const el = root as Element;
-    if (el.nodeType === 1 && el.localName === RUN_TAG) return unwrap(el);
+    const el = root.nodeType === 9 ? (root as Document).documentElement : (root as Element);
+    if (!el) return;
+    if (el.localName === RUN_TAG && runs.has(el)) return unwrap(el);
     for (const run of [...el.getElementsByTagName(RUN_TAG)]) unwrap(run);
+    for (const copy of copiesIn(el)) revert(copy);
   }
 
   /** Undo a run whose reading changed because text was added next to it. */
@@ -414,6 +570,8 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
     box.className = 'box';
     box.setAttribute('role', 'dialog');
     box.setAttribute('aria-label', 'Zoneshift');
+    // Tab is kept inside while it is open.
+    box.setAttribute('aria-modal', 'true');
 
     const dl = doc.createElement('dl');
     for (const [label, value] of [
@@ -473,7 +631,18 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
     });
 
     shadow.append(box);
-    doc.documentElement.append(host);
+    // Everything outside an open modal dialog is inert, so the popover goes
+    // inside it; the top layer (where supported) puts it above the dialog or
+    // a fullscreen element.
+    const modal = icon.closest('dialog');
+    const fullscreen = doc.fullscreenElement;
+    const container =
+      modal && isModal(modal) ? modal : fullscreen?.contains(icon) ? fullscreen : doc.documentElement;
+    container.append(host);
+    if (typeof host.showPopover === 'function') {
+      host.setAttribute('popover', 'manual');
+      host.showPopover();
+    }
     popover = { host, mark, icon };
     icon.setAttribute('aria-expanded', 'true');
 
@@ -537,6 +706,25 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
     const onPress = (event: Event) => {
       if (iconFrom(event)) event.stopPropagation();
     };
+    // The browser places the caret for a press after the page's handlers run;
+    // if a handler made the text editable, the run it hit is gone by then, so
+    // the caret is put back at the matching place in the restored text.
+    const onPressStart = (event: MouseEvent) => {
+      press = null;
+      if (event.button !== 0 || iconFrom(event)) return;
+      const target = event.target as Element | null;
+      const run = target?.nodeType === 1 ? target.closest(RUN_TAG) : null;
+      if (!run || !runs.has(run)) return;
+      const hit = caretAt(event.clientX, event.clientY);
+      if (hit && run.contains(hit.node)) press = { run, offset: originalOffset(run, hit.node, hit.offset) };
+    };
+    const onPressEnd = () => {
+      const p = press;
+      press = null;
+      const sel = view.getSelection();
+      if (!p?.text?.isConnected || !sel || !sel.isCollapsed) return;
+      sel.collapse(p.text, Math.min(p.offset, p.text.data.length));
+    };
     const PRESS = ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'dblclick', 'auxclick'];
     const onScroll = (event: Event) => {
       if (!popover) return;
@@ -553,6 +741,50 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
       if (root) restore(root);
     };
 
+    // Copying annotated text: the clipboard gets the text as shown, without
+    // Zoneshift's elements, so pasting elsewhere carries no marks or icons.
+    // Runs last (window, bubbling) and steps aside if the site already set
+    // the clipboard itself; selections without marks are left to the browser.
+    const onClipboard = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return;
+      const sel = view.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+      const ranges = Array.from({ length: sel.rangeCount }, (_, i) => sel.getRangeAt(i));
+      const fragments = ranges.map((r) => r.cloneContents());
+      const inOwn = (n: Node) => (n.nodeType === 1 ? (n as Element) : n.parentElement)?.closest(COPYABLE) != null;
+      const touched =
+        ranges.some((r) => inOwn(r.startContainer) || inOwn(r.endContainer)) ||
+        fragments.some((f) => f.querySelector(COPYABLE) != null);
+      if (!touched) return;
+      if (event.type === 'cut') {
+        // Cut only acts in editable content: put the page's own text back
+        // first and let the browser cut that.
+        for (const r of ranges) {
+          const c = r.commonAncestorContainer;
+          const root = editingRoot(c.nodeType === 1 ? (c as Element) : c.parentElement!);
+          if (root) restore(root);
+        }
+        return;
+      }
+      if (!event.clipboardData) return;
+      const html = fragments
+        .map((f) => {
+          for (const el of [...f.querySelectorAll(COPYABLE)]) {
+            if (el.localName === ICON_TAG) el.remove();
+            else el.replaceWith(...el.childNodes);
+          }
+          const box = doc.createElement('div');
+          box.append(f);
+          return box.innerHTML;
+        })
+        .join('');
+      event.clipboardData.setData('text/plain', sel.toString());
+      event.clipboardData.setData('text/html', html);
+      event.preventDefault();
+    };
+
+    doc.addEventListener('mousedown', onPressStart, true);
+    doc.addEventListener('mouseup', onPressEnd, true);
     doc.addEventListener('click', onClick, true);
     doc.addEventListener('keydown', onKeydown, true);
     doc.addEventListener('keyup', onKeyup, true);
@@ -560,6 +792,8 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
     doc.addEventListener('focusin', onEditIntent, true);
     doc.addEventListener('beforeinput', onEditIntent, true);
     view.addEventListener('scroll', onScroll, { passive: true, capture: true });
+    view.addEventListener('copy', onClipboard);
+    view.addEventListener('cut', onClipboard);
 
     // Pages that add content later (single-page apps, streaming logs), replace
     // <body> (Turbo-style navigation), or make content editable.
@@ -587,10 +821,20 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
         // Our own changes inside a run (switching a time) need nothing.
         if (isOwn(r.target as Element)) continue;
         for (const n of r.addedNodes) {
-          if (n.nodeType === 1 && isOwn(n as Element)) continue;
-          // Annotated content moved into an editor.
-          if (n.nodeType === 1 && n.isConnected && (n as Element).getElementsByTagName(RUN_TAG)[0] && inEditable(n as Element)) {
-            restore(n);
+          if (!n.isConnected) continue;
+          if (n.nodeType === 1) {
+            const el = n as Element;
+            if (isOwn(el) && isLive(el)) continue;
+            // Copies of annotated markup (a snapshot put back, a cloned slide,
+            // a paste) become plain original text, then are annotated again
+            // like any new text, unless they sit in editable content.
+            const copies = copiesIn(el);
+            if (copies.length) {
+              for (const copy of copies) for (const t of revert(copy)) queue(t);
+              if (!el.isConnected) continue;
+            }
+            // Annotated content moved into an editor.
+            if (el.getElementsByTagName(RUN_TAG)[0] && inEditable(el)) restore(el);
           }
           // Text added next to a run can change how the run reads ("UTC" + "+2").
           // A run that now reads differently is undone; its text node comes back
@@ -612,6 +856,8 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
       observer.disconnect();
       clearTimeout(timer);
       closePopover();
+      doc.removeEventListener('mousedown', onPressStart, true);
+      doc.removeEventListener('mouseup', onPressEnd, true);
       doc.removeEventListener('click', onClick, true);
       doc.removeEventListener('keydown', onKeydown, true);
       doc.removeEventListener('keyup', onKeyup, true);
@@ -619,6 +865,8 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
       doc.removeEventListener('focusin', onEditIntent, true);
       doc.removeEventListener('beforeinput', onEditIntent, true);
       view.removeEventListener('scroll', onScroll, { capture: true });
+      view.removeEventListener('copy', onClipboard);
+      view.removeEventListener('cut', onClipboard);
       restore(doc.documentElement);
     };
   }
