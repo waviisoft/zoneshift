@@ -145,12 +145,77 @@
   - **Convert all times on this page** / **Show all originals on this page**;
   - **This is wrong** (not built yet): wrong zone, not a date/time, wrong
     date, day/month swapped, other, plus free text.
-- A `MutationObserver` annotates content added after load. Framework-rendered
-  pages can still overwrite or object to changed text nodes; the planned
-  fallback leaves the text untouched and shows the conversion only in the
-  popover.
+- A `MutationObserver` annotates content added after load, including a
+  replaced `<body>` (Turbo-style navigation). Framework-rendered pages can
+  still overwrite or object to changed text nodes; the planned fallback leaves
+  the text untouched and shows the conversion only in the popover.
 - A timestamp split across several elements (syntax-highlighted logs) is not
   recognised yet.
+
+**Never touched**
+
+- Anything inside SVG or MathML (any element outside the HTML namespace,
+  including HTML inside `<foreignObject>`), and SVG or XML documents.
+- Form controls and their contents: `textarea`, `input`, `select`, `option`,
+  `optgroup`, `datalist`; also on XHTML pages.
+- Text that is not rendered as page text: `script`, `style`, `noscript`,
+  `template`, `title`, `iframe`, `object`, `canvas`, `audio`, `video`.
+- `<time>` elements (for now).
+- Editable content: `contenteditable` (including non-editable islands inside
+  an editor), `designMode`, regions made editable by CSS, and custom text
+  boxes (`role="textbox"`, `searchbox`, `combobox`, `spinbutton`).
+- Content that becomes editable after it was annotated gets the page's own
+  text nodes back, the same node objects, with no marks or icons, so the site
+  never saves a rewritten document. This happens when the `contenteditable`
+  attribute changes (at the next microtask), when focus or input enters an
+  editable region (covers `designMode` and CSS), or when annotated content is
+  moved into an editor. It is not annotated again while it stays editable. A
+  script that switches editing on and reads the HTML in the same task still
+  sees the marks.
+
+**Page structure**
+
+- Each text node holding a recognised time is replaced by one inline
+  `<zoneshift-run>` holding the text and `<zoneshift-mark>` elements
+  (`<zoneshift-text>` and `<zoneshift-icon>`). One element in place of one
+  text node keeps flex and grid layouts to the same number of items, and the
+  original text node can be put back at any time.
+- Custom element names, so page rules aimed at `span` or `div` never match.
+  The wrappers are reset (`all: unset`, no generated content) and inherit
+  everything from the page; the icon's own rules are `!important`, so broad
+  page rules (`.meta *`, `*::before`) cannot distort it. These rules apply
+  only to Zoneshift's elements; page text is never given a value of ours.
+- Stopping (extension updated, disabled or removed) restores every original
+  text node.
+
+**Text-node boundaries**
+
+- A match is converted only if reading it together with the text on either
+  side, within the same line of inline elements, gives the same match.
+  "Call at 10:00 AM UTC" followed by a text node "+2 tomorrow" is left alone,
+  because the whole reads as UTC+2; "From 1:30" + "–3:00 PM UTC" is a range
+  and is left alone.
+- A match touching the edge of its text node is left alone when the
+  neighbouring text continues it without a space (letters, digits, `+`, `-`,
+  `−`, dashes, `:`, `/`).
+- Text before a match may only extend it leftwards: "Friday at" + "1:30 AM
+  UTC" still converts the time.
+- When text is added next to a converted time and changes how it reads, the
+  conversion is undone.
+
+**Keyboard, focus and pointer**
+
+- The icon is a focusable `role="button"` with `aria-haspopup="dialog"` and
+  `aria-expanded` kept in sync. Enter or Space opens the popover; those keys
+  and pointer presses on the icon never reach the page's own handlers or a
+  surrounding link or button.
+- Opening moves focus to the popover's first button; Tab and Shift+Tab cycle
+  through its buttons. Escape, or choosing an action, closes it and returns
+  focus to the icon. Focus moving elsewhere (a click) closes it.
+- Escape is taken only while the popover is open, so it never also closes a
+  site's dialog; with the popover closed, every key is the page's.
+- The popover closes when the page or a container around the icon scrolls,
+  not when an unrelated box scrolls.
 
 ## Feedback
 
@@ -159,6 +224,9 @@ user reviews before submitting. Each accepted report becomes a test case.
 The extension itself makes no network requests.
 
 ## Settings
+
+Not built yet. The extension currently requests no permissions; `storage`
+arrives with settings, once agreed.
 
 - On/off per site.
 - Default zone per site, for zone-less times.
