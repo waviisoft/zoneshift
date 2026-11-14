@@ -1,0 +1,20 @@
+{
+  "name": "zoneshift",
+  "private": true,
+  "license": "MIT",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm --filter @zoneshift/extension build",
+    "dev": "pnpm --filter @zoneshift/extension dev",
+    "e2e": "pnpm --filter @zoneshift/extension build:chrome && pnpm --filter @zoneshift/extension e2e"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

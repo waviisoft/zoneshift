@@ -1,0 +1,87 @@
+/* Zoneshift's elements in the page. They use custom element names, so page
+   rules aimed at `span` (or `div`) never match them, and every declaration
+   here is !important so broader page rules (`.meta *`, `p > *::before`)
+   cannot distort them either. The !important rules only ever apply to
+   these elements; page text is never given a value of ours. */
+
+/* The wrappers around the text are transparent: they inherit everything
+   from the page, add no box, and take no generated content, so the text
+   looks exactly as it did when it was a bare text node. */
+zoneshift-run,
+zoneshift-mark,
+zoneshift-text {
+  all: unset !important;
+}
+zoneshift-run::before,
+zoneshift-run::after,
+zoneshift-mark::before,
+zoneshift-mark::after,
+zoneshift-text::before,
+zoneshift-text::after {
+  content: none !important;
+  display: none !important;
+}
+
+/* Marker shown after every time Zoneshift recognises. Drawn in CSS so it
+   needs no image and survives strict page content-security policies. */
+zoneshift-icon.zoneshift-icon {
+  all: unset !important;
+  box-sizing: content-box !important;
+  display: inline-block !important;
+  position: relative !important;
+  width: 0.7em !important;
+  height: 0.7em !important;
+  margin: 0 !important;
+  margin-inline-start: 0.3em !important;
+  padding: 0 !important;
+  border: 0.1em solid currentColor !important;
+  border-radius: 50% !important;
+  vertical-align: -0.08em !important;
+  cursor: pointer !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+zoneshift-icon.zoneshift-icon::before,
+zoneshift-icon.zoneshift-icon::after {
+  all: unset !important;
+  content: '' !important;
+  display: block !important;
+  position: absolute !important;
+  left: calc(50% - 0.05em) !important;
+  background: currentColor !important;
+  border-radius: 0.05em !important;
+}
+/* minute hand */
+zoneshift-icon.zoneshift-icon::before {
+  top: 12% !important;
+  width: 0.1em !important;
+  height: 44% !important;
+}
+/* hour hand */
+zoneshift-icon.zoneshift-icon::after {
+  top: calc(50% - 0.05em) !important;
+  width: 36% !important;
+  height: 0.1em !important;
+}
+zoneshift-icon.zoneshift-icon:focus-visible {
+  outline: 2px solid #3b82f6 !important;
+  outline-offset: 2px !important;
+}
+
+/* Converted: solid, coloured. */
+zoneshift-mark.zoneshift[data-zs-state='converted'] > zoneshift-icon.zoneshift-icon {
+  color: #fff !important;
+  background: #2563eb !important;
+  border-color: #2563eb !important;
+}
+zoneshift-mark.zoneshift[data-zs-state='converted'][data-zs-confidence='low'] > zoneshift-icon.zoneshift-icon {
+  background: #d97706 !important;
+  border-color: #d97706 !important;
+}
+/* Showing the original, conversion available: hollow, muted. */
+zoneshift-mark.zoneshift[data-zs-state='original'] > zoneshift-icon.zoneshift-icon {
+  opacity: 0.55 !important;
+}
+zoneshift-mark.zoneshift[data-zs-state='original'] > zoneshift-icon.zoneshift-icon:hover {
+  opacity: 1 !important;
+}
