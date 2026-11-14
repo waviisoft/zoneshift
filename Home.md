@@ -11,6 +11,8 @@ This wiki holds the **product specs**. Code, tests and the overall design (`docs
 
 Every spec has the same sections: Summary, Decisions for the owner, Behaviour, Left alone, Edge cases, Non-goals, Acceptance tests, Changes to `docs/design.md`.
 
+Decisions and their reasons are recorded in the [Decision log](Decision-log).
+
 ## Specs
 
 | Spec | Issue | Status |
