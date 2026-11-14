@@ -38,6 +38,17 @@ export interface Annotator {
 export const POPOVER_ID = 'zoneshift-popover';
 /** Delay before content added to the page is annotated, in milliseconds. */
 export const MUTATION_DELAY = 200;
+/**
+ * Budget per container against sites that undo the annotator's work over and
+ * over (putting a snapshot back, restoring their own text): this many strikes
+ * within FIGHT_WINDOW pause the container for a back-off that doubles each time.
+ */
+export const FIGHT_LIMIT = 5;
+export const FIGHT_WINDOW = 2_000;
+export const BACKOFF_START = 5_000;
+export const BACKOFF_MAX = 5 * 60_000;
+/** A run of ours removed by the page this soon after it was made counts as a strike. */
+export const FIGHT_RECENT = 1_000;
 
 /** Element names. Custom names, so page rules aimed at `span` or `div` never match them. */
 export const RUN_TAG = 'zoneshift-run';
@@ -46,7 +57,7 @@ export const TEXT_TAG = 'zoneshift-text';
 export const ICON_TAG = 'zoneshift-icon';
 const POPOVER_TAG = 'zoneshift-popover';
 /** Elements that may turn up as copies of the annotator's own (cloned, pasted, restored from a snapshot). */
-const COPYABLE = `${RUN_TAG}, ${MARK_TAG}, ${TEXT_TAG}, ${ICON_TAG}`;
+const COPYABLE = `${RUN_TAG}, ${MARK_TAG}, ${TEXT_TAG}, ${ICON_TAG}, ${POPOVER_TAG}`;
 /** On each mark: the text it replaced, so any copy of it can be turned back into the original. */
 const ORIGINAL_ATTR = 'data-zs-original';
 const OWN_PREFIX = 'zoneshift-';
@@ -118,7 +129,21 @@ interface Run {
   context: string;
   /** Where and what each mark in the run was read as, to notice when context changes the reading. */
   readings: string;
+  /** When it was made (Date.now()). */
+  created: number;
 }
+
+/** A record of fights with the page, for a container or for one copied text. */
+interface Budget {
+  strikes: number[];
+  /** Paused until this time (Date.now()). */
+  until: number;
+  backoff: number;
+  /** For copied text: where paused copies were left, to look at again on resuming. */
+  left?: WeakRef<Element>[];
+}
+/** At most this many copied texts are tracked; the oldest is forgotten first. */
+const COPY_BUDGETS = 500;
 
 /** What a text node will become. */
 interface Plan {
@@ -162,6 +187,61 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
    * makes content editable on mousedown).
    */
   let press: { run: Element; offset: number; text?: Text } | null = null;
+  /** Fights over the annotator's own runs, by the container the page changes. */
+  const budgets = new WeakMap<Element, Budget>();
+  /**
+   * Fights over copies, by the text copied, not where it lands: a site
+   * putting the same snapshot back may build a new wrapper each time.
+   */
+  const copyBudgets = new Map<string, Budget>();
+  /** Called when a back-off ends, to look at these elements again. */
+  let onResume: (elements: () => Element[], delay: number) => void = () => {};
+
+  const newBudget = (): Budget => ({ strikes: [], until: 0, backoff: BACKOFF_START });
+  /** Count one fight; enough of them within FIGHT_WINDOW pause it. Returns the pause, if one began. */
+  function count(b: Budget, now: number): number {
+    b.strikes = b.strikes.filter((t) => now - t < FIGHT_WINDOW);
+    b.strikes.push(now);
+    if (b.strikes.length < FIGHT_LIMIT) return 0;
+    const delay = b.backoff;
+    b.strikes = [];
+    b.until = now + delay;
+    b.backoff = Math.min(b.backoff * 2, BACKOFF_MAX);
+    return delay;
+  }
+  function strike(container: Element, now = Date.now()): void {
+    let b = budgets.get(container);
+    if (!b) budgets.set(container, (b = newBudget()));
+    const delay = count(b, now);
+    if (delay) onResume(() => [container], delay);
+  }
+  /** Count a fight over a copy; true if this one began a pause. */
+  function strikeCopy(key: string, now: number): boolean {
+    let b = copyBudgets.get(key);
+    if (!b) {
+      if (copyBudgets.size >= COPY_BUDGETS) copyBudgets.delete(copyBudgets.keys().next().value!);
+      copyBudgets.set(key, (b = newBudget()));
+    }
+    const delay = count(b, now);
+    if (delay) {
+      const budget = b;
+      budget.left = [];
+      onResume(() => {
+        const left = (budget.left ?? []).map((r) => r.deref()).filter((e): e is Element => !!e);
+        budget.left = undefined;
+        return left;
+      }, delay);
+    }
+    return delay > 0;
+  }
+  const paused = (el: Element, now: number) => (budgets.get(el)?.until ?? 0) > now;
+  /** What a copy is counted under: the text it stands for. */
+  const copyKey = (el: Element) =>
+    el.localName === RUN_TAG
+      ? `run:${[...el.childNodes].map(lengthlessText).join('')}`
+      : el.localName === MARK_TAG
+        ? `mark:${markOriginal(el)}`
+        : `${el.localName}:${el.textContent ?? ''}`;
 
   const isOwn = (el: Element) => el.localName.startsWith(OWN_PREFIX);
   const designMode = () => doc.designMode === 'on';
@@ -201,9 +281,10 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
     const parent = node.parentElement;
     if (!parent || !doc.body || designMode()) return true;
     let inBody = false;
+    const now = Date.now();
     for (let el: Element | null = parent; el; el = el.parentElement) {
       if (el === doc.body) inBody = true;
-      if (el.namespaceURI !== XHTML) return true;
+      if (el.namespaceURI !== XHTML || paused(el, now)) return true;
       const name = el.localName.toLowerCase();
       if (SKIP.has(name) || name.startsWith(OWN_PREFIX)) return true;
       const ce = el.getAttribute('contenteditable');
@@ -346,7 +427,7 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
       pos = c.index + c.length;
     }
     run.append(text.slice(pos));
-    runs.set(run, { original: node, context: context.join('\0'), readings: readingsOf(found) });
+    runs.set(run, { original: node, context: context.join('\0'), readings: readingsOf(found), created: Date.now() });
     node.replaceWith(run);
   }
 
@@ -389,6 +470,8 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
       case TEXT_TAG:
       case ICON_TAG:
         return el.parentElement?.localName === MARK_TAG && isLive(el.parentElement);
+      case POPOVER_TAG:
+        return el === popover?.host;
       default:
         return true;
     }
@@ -522,14 +605,17 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
     return out;
   }
 
-  /** Put the page's own text back under `root`: our runs, and any copies of them. */
-  function restore(root: Node): void {
+  /**
+   * Put the page's own text back under `root`: our runs, and (unless
+   * `copies` is false) any copies of them.
+   */
+  function restore(root: Node, copies = true): void {
     if (root.nodeType !== 1 && root.nodeType !== 9) return;
     const el = root.nodeType === 9 ? (root as Document).documentElement : (root as Element);
     if (!el) return;
     if (el.localName === RUN_TAG && runs.has(el)) return unwrap(el);
     for (const run of [...el.getElementsByTagName(RUN_TAG)]) unwrap(run);
-    for (const copy of copiesIn(el)) revert(copy);
+    if (copies) for (const copy of copiesIn(el)) revert(copy);
   }
 
   /** Undo a run whose reading changed because text was added next to it. */
@@ -664,6 +750,44 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
       : null;
   }
 
+  /**
+   * The browser's own plain text for a selection: what Selection.toString()
+   * gives, plus the alt text of selected images, which the browser's copy
+   * includes and toString() leaves out. Reads each stretch between images
+   * by selecting it in turn, then puts the reader's selection back.
+   */
+  function clipboardText(sel: Selection, ranges: Range[]): string {
+    const images = ranges.map((r) => {
+      const c = r.commonAncestorContainer;
+      const scope = c.nodeType === 1 ? (c as Element) : c.parentElement;
+      return [...(scope?.querySelectorAll('img[alt]') ?? [])].filter(
+        (img) => r.intersectsNode(img) && img.getAttribute('alt') && img.getClientRects().length > 0,
+      );
+    });
+    if (images.every((list) => list.length === 0)) return sel.toString();
+    const saved = { an: sel.anchorNode!, ao: sel.anchorOffset, fn: sel.focusNode!, fo: sel.focusOffset };
+    const textOf = (start: [Node, number], end: [Node, number]) => {
+      const r = doc.createRange();
+      r.setStart(...start);
+      r.setEnd(...end);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      return sel.toString();
+    };
+    let out = '';
+    ranges.forEach((range, i) => {
+      let from: [Node, number] = [range.startContainer, range.startOffset];
+      for (const img of images[i]!) {
+        const at = [...img.parentNode!.childNodes].indexOf(img as ChildNode);
+        out += textOf(from, [img.parentNode!, at]) + img.getAttribute('alt');
+        from = [img.parentNode!, at + 1];
+      }
+      out += textOf(from, [range.endContainer, range.endOffset]);
+    });
+    sel.setBaseAndExtent(saved.an, saved.ao, saved.fn, saved.fo);
+    return out;
+  }
+
   function start(): () => void {
     if (!supported || !view) return () => {};
     if (doc.body) annotate(doc.body);
@@ -676,8 +800,37 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
         event.stopPropagation();
         if (popover?.icon === icon) closePopover();
         else openPopover(icon.parentElement!);
+      } else if (isCopyIcon(event.target)) {
+        event.preventDefault();
+        event.stopPropagation();
+        openCopy(event.target as Element);
       } else if (popover && !event.composedPath().includes(popover.host)) {
         closePopover();
+      }
+    };
+    const isCopyIcon = (t: EventTarget | null) =>
+      (t as Node | null)?.nodeType === 1 && (t as Element).localName === ICON_TAG && !isLive(t as Element);
+    /**
+     * The icon of a copy not yet turned back (that waits for the next pass):
+     * do that pass now, then open the icon of the time that replaced it.
+     */
+    const openCopy = (icon: Element) => {
+      const mark = icon.parentElement;
+      if (!mark || mark.localName !== MARK_TAG) return;
+      const run = mark.parentElement?.localName === RUN_TAG ? mark.parentElement : null;
+      const outer = run ?? mark;
+      const parent = outer.parentNode;
+      if (!parent) return;
+      const index = [...parent.childNodes].indexOf(outer as ChildNode);
+      const nth = run ? [...run.children].filter((c) => c.localName === MARK_TAG).indexOf(mark) : 0;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        flush();
+      }
+      const now = parent.childNodes[index];
+      const live = now?.nodeType === 1 && runs.has(now as Element) ? (now as Element).querySelectorAll(MARK_TAG)[nth] : null;
+      if (live) {
+        openPopover(live as HTMLElement);
       }
     };
     const onKeydown = (event: KeyboardEvent) => {
@@ -693,6 +846,10 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
         event.preventDefault();
         event.stopPropagation();
         openPopover(icon.parentElement!);
+      } else if ((event.key === 'Enter' || event.key === ' ') && isCopyIcon(event.target)) {
+        event.preventDefault();
+        event.stopPropagation();
+        openCopy(event.target as Element);
       }
     };
     const onKeyup = (event: KeyboardEvent) => {
@@ -741,20 +898,26 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
       if (root) restore(root);
     };
 
-    // Copying annotated text: the clipboard gets the text as shown, without
-    // Zoneshift's elements, so pasting elsewhere carries no marks or icons.
-    // Runs last (window, bubbling) and steps aside if the site already set
-    // the clipboard itself; selections without marks are left to the browser.
+    // Copying a selection that includes annotated text: the clipboard gets
+    // only plain text, the visible text exactly as the browser would copy it,
+    // and no HTML, since the browser's HTML would carry Zoneshift's elements.
+    // Registered first (window, capture), so a site handler that stops the
+    // event cannot leave marks on the clipboard; a site handler that sets
+    // data itself afterwards still wins. Selections without marks are left
+    // entirely to the browser.
     const onClipboard = (event: ClipboardEvent) => {
       if (event.defaultPrevented) return;
       const sel = view.getSelection();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
       const ranges = Array.from({ length: sel.rangeCount }, (_, i) => sel.getRangeAt(i));
-      const fragments = ranges.map((r) => r.cloneContents());
       const inOwn = (n: Node) => (n.nodeType === 1 ? (n as Element) : n.parentElement)?.closest(COPYABLE) != null;
-      const touched =
-        ranges.some((r) => inOwn(r.startContainer) || inOwn(r.endContainer)) ||
-        fragments.some((f) => f.querySelector(COPYABLE) != null);
+      const touched = ranges.some((r) => {
+        if (inOwn(r.startContainer) || inOwn(r.endContainer)) return true;
+        const c = r.commonAncestorContainer;
+        const scope = c.nodeType === 1 ? (c as Element) : c.parentElement;
+        for (const el of scope?.querySelectorAll(COPYABLE) ?? []) if (r.intersectsNode(el)) return true;
+        return false;
+      });
       if (!touched) return;
       if (event.type === 'cut') {
         // Cut only acts in editable content: put the page's own text back
@@ -767,19 +930,7 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
         return;
       }
       if (!event.clipboardData) return;
-      const html = fragments
-        .map((f) => {
-          for (const el of [...f.querySelectorAll(COPYABLE)]) {
-            if (el.localName === ICON_TAG) el.remove();
-            else el.replaceWith(...el.childNodes);
-          }
-          const box = doc.createElement('div');
-          box.append(f);
-          return box.innerHTML;
-        })
-        .join('');
-      event.clipboardData.setData('text/plain', sel.toString());
-      event.clipboardData.setData('text/html', html);
+      event.clipboardData.setData('text/plain', clipboardText(sel, ranges));
       event.preventDefault();
     };
 
@@ -792,55 +943,126 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
     doc.addEventListener('focusin', onEditIntent, true);
     doc.addEventListener('beforeinput', onEditIntent, true);
     view.addEventListener('scroll', onScroll, { passive: true, capture: true });
-    view.addEventListener('copy', onClipboard);
-    view.addEventListener('cut', onClipboard);
+    view.addEventListener('copy', onClipboard, true);
+    view.addEventListener('cut', onClipboard, true);
 
     // Pages that add content later (single-page apps, streaming logs), replace
     // <body> (Turbo-style navigation), or make content editable.
-    let pending: Node[] = [];
+    // Each queued node with the container whose children changed, which is
+    // what the fight budget is counted against.
+    let pending: [Node, Element | null][] = [];
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const resumeTimers = new Set<ReturnType<typeof setTimeout>>();
     const flush = () => {
       timer = undefined;
       const batch = pending;
       pending = [];
-      annotateAll(batch);
+      const now = Date.now();
+      // Copies of annotated markup (a snapshot put back, a cloned slide, a
+      // paste) become plain original text, then are annotated with the rest,
+      // unless they sit in editable content. Done here, never in the
+      // observer callback, so a site that puts its snapshot back from its own
+      // observer cannot ping-pong with us; each container doing it counts
+      // against its budget.
+      const reverted: Text[] = [];
+      const struck = new Set<string>();
+      for (const [n, container] of batch) {
+        if (n.nodeType !== 1 || !n.isConnected || paused(container ?? (n as Element), now)) continue;
+        for (const copy of copiesIn(n as Element)) {
+          if (!copy.isConnected) continue;
+          const key = copyKey(copy);
+          if (!struck.has(key)) {
+            struck.add(key);
+            if (!((copyBudgets.get(key)?.until ?? 0) > now)) strikeCopy(key, now);
+          }
+          const b = copyBudgets.get(key)!;
+          if (b.until > now) {
+            // Paused: left as it is, and looked at again when the pause ends.
+            if (b.left && b.left.length < 50 && copy.parentElement) b.left.push(new WeakRef(copy.parentElement));
+            continue;
+          }
+          reverted.push(...revert(copy));
+        }
+      }
+      annotateAll([...batch.map(([n]) => n), ...reverted]);
     };
-    const queue = (n: Node) => {
-      pending.push(n);
+    const queue = (n: Node, container: Element | null = null) => {
+      pending.push([n, container]);
       if (timer === undefined) timer = setTimeout(flush, MUTATION_DELAY);
     };
+    onResume = (elements, delay) => {
+      const t = setTimeout(() => {
+        resumeTimers.delete(t);
+        for (const el of elements()) if (el.isConnected) queue(el, el);
+      }, delay);
+      resumeTimers.add(t);
+    };
+    /** Original text of each run of ours in a removed subtree made in the last FIGHT_RECENT ms. */
+    const recentOriginals = (el: Element, now: number, out: string[]) => {
+      const take = (run: Element) => {
+        const record = runs.get(run);
+        if (record && now - record.created < FIGHT_RECENT) out.push(record.original.data);
+      };
+      if (el.localName === RUN_TAG) take(el);
+      else for (const run of el.getElementsByTagName(RUN_TAG)) take(run);
+    };
     const observer = new view.MutationObserver((records) => {
+      const now = Date.now();
+      const struck = new Set<Element>();
+      const removedRecent = new Map<Element, string[]>();
       if (designMode() && doc.body?.getElementsByTagName(RUN_TAG).length) restore(doc.body);
       for (const r of records) {
         if (r.type === 'attributes') {
           const el = r.target as Element;
           if (inEditable(el)) restore(el);
-          else queue(el);
+          else queue(el, el);
           continue;
         }
         // Our own changes inside a run (switching a time) need nothing.
         if (isOwn(r.target as Element)) continue;
+        const target = r.target.nodeType === 1 ? (r.target as Element) : null;
+        // Noted for the fight check below.
+        if (target) {
+          for (const n of r.removedNodes) {
+            if (n.nodeType !== 1) continue;
+            const list = removedRecent.get(target) ?? [];
+            recentOriginals(n as Element, now, list);
+            if (list.length) removedRecent.set(target, list);
+          }
+        }
         for (const n of r.addedNodes) {
           if (!n.isConnected) continue;
           if (n.nodeType === 1) {
             const el = n as Element;
             if (isOwn(el) && isLive(el)) continue;
-            // Copies of annotated markup (a snapshot put back, a cloned slide,
-            // a paste) become plain original text, then are annotated again
-            // like any new text, unless they sit in editable content.
-            const copies = copiesIn(el);
-            if (copies.length) {
-              for (const copy of copies) for (const t of revert(copy)) queue(t);
-              if (!el.isConnected) continue;
-            }
-            // Annotated content moved into an editor.
-            if (el.getElementsByTagName(RUN_TAG)[0] && inEditable(el)) restore(el);
+            // Annotated content moved into an editor: our own runs go now,
+            // copies on the next pass.
+            if (el.getElementsByTagName(RUN_TAG)[0] && inEditable(el)) restore(el, false);
           }
           // Text added next to a run can change how the run reads ("UTC" + "+2").
           // A run that now reads differently is undone; its text node comes back
           // through this observer and is annotated again with the new neighbour.
           for (const sib of [n.previousSibling, n.nextSibling]) if (sib?.nodeType === 1) recheck(sib as Element);
-          queue(n);
+          queue(n, target);
+        }
+      }
+      // The page removed a run of ours it had only just been given and put
+      // the same text back: a fight (a site restoring its own text, #18),
+      // counted against the container. New text (a ticking clock) is not.
+      // Only where one of our recent runs was removed is the added text read.
+      const addedText = new Map<Element, string>();
+      if (removedRecent.size) {
+        for (const r of records) {
+          const t = r.target as Element;
+          if (r.type !== 'childList' || !removedRecent.has(t)) continue;
+          for (const n of r.addedNodes) addedText.set(t, (addedText.get(t) ?? '') + (n.textContent ?? ''));
+        }
+      }
+      for (const [target, originals] of removedRecent) {
+        const added = addedText.get(target) ?? '';
+        if (!struck.has(target) && originals.some((o) => added.includes(o))) {
+          struck.add(target);
+          strike(target, now);
         }
       }
       if (popover && !popover.mark.isConnected) closePopover();
@@ -865,8 +1087,9 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
       doc.removeEventListener('focusin', onEditIntent, true);
       doc.removeEventListener('beforeinput', onEditIntent, true);
       view.removeEventListener('scroll', onScroll, { capture: true });
-      view.removeEventListener('copy', onClipboard);
-      view.removeEventListener('cut', onClipboard);
+      view.removeEventListener('copy', onClipboard, true);
+      view.removeEventListener('cut', onClipboard, true);
+      for (const t of resumeTimers) clearTimeout(t);
       restore(doc.documentElement);
     };
   }

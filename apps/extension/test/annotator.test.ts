@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createAnnotator, MUTATION_DELAY, POPOVER_ID, type Annotator } from '../lib/annotator';
+import {
+  BACKOFF_START,
+  createAnnotator,
+  FIGHT_LIMIT,
+  MUTATION_DELAY,
+  POPOVER_ID,
+  type Annotator,
+} from '../lib/annotator';
 
 const OPTIONS = {
   targetZone: 'America/Los_Angeles',
@@ -475,6 +482,33 @@ describe('content added later', () => {
     expect(marks()).toHaveLength(0);
   });
 
+  it('backs off from a site that keeps restoring its own text, but not from new content', async () => {
+    load('<p id="fight"></p><ul id="chat"></ul><p id="clock"></p>');
+    const fight = document.getElementById('fight')!;
+    const want = 'Server time 1:30 AM UTC';
+    let restores = 0;
+    const site = new MutationObserver(() => {
+      if (fight.textContent !== want) {
+        restores++;
+        fight.textContent = want;
+      }
+    });
+    site.observe(fight, { childList: true, subtree: true });
+    fight.textContent = want;
+    const chat = document.getElementById('chat')!;
+    const clock = document.getElementById('clock')!;
+    for (let i = 0; i < 20; i++) {
+      // A chat that appends a message, and a clock that shows a new time.
+      chat.insertAdjacentHTML('beforeend', `<li>Message ${i} at 2:${String(i).padStart(2, '0')} AM UTC</li>`);
+      clock.textContent = `Now 3:${String(i).padStart(2, '0')} AM UTC`;
+      await settle();
+    }
+    site.disconnect();
+    expect(restores).toBeLessThanOrEqual(FIGHT_LIMIT + 1);
+    expect(chat.querySelectorAll('zoneshift-mark')).toHaveLength(20);
+    expect(clock.querySelectorAll('zoneshift-mark')).toHaveLength(1);
+  });
+
   it('puts the page text back when stopped', () => {
     load('<p id="p"></p>');
     const p = document.getElementById('p')!;
@@ -643,6 +677,96 @@ describe('copies of annotated markup', () => {
     expect(marks()).toHaveLength(1);
   });
 
+  it('turns copies back on the next pass, never in the same microtask', async () => {
+    load('<div id="slide"><p>Kick-off 1:30 AM UTC</p></div>');
+    const slide = document.getElementById('slide')!;
+    slide.innerHTML = slide.innerHTML;
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(slide.querySelector('zoneshift-run')).not.toBeNull();
+    expect(marks()).toHaveLength(1);
+    await settle();
+    // Now one of ours again.
+    icon(marks()[0]!).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+    expect(popover()).not.toBeNull();
+  });
+
+  it('opens a copy’s icon straight away, without waiting for the next pass', async () => {
+    load('<div id="slide"><p>Kick-off 1:30 AM UTC</p></div>');
+    const slide = document.getElementById('slide')!;
+    slide.innerHTML = slide.innerHTML;
+    await Promise.resolve();
+    const copyIcon = slide.querySelector<HTMLElement>('.zoneshift-icon')!;
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, composed: true });
+    copyIcon.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(popover()).not.toBeNull();
+    expect(slide.querySelector('.zoneshift-icon')).not.toBe(copyIcon);
+    expect(slide.querySelector('.zoneshift-icon')!.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('does not ping-pong with a site observer that puts its annotated snapshot back', async () => {
+    load('<div id="f"><p>Fight 3:30 AM UTC.</p></div>');
+    const f = document.getElementById('f')!;
+    const snapshot = f.innerHTML;
+    let restores = 0;
+    const site = new MutationObserver(() => {
+      if (restores >= 1000) return site.disconnect();
+      if (f.innerHTML !== snapshot) {
+        restores++;
+        f.innerHTML = snapshot;
+      }
+    });
+    site.observe(f, { childList: true, subtree: true, attributes: true });
+    f.innerHTML = snapshot;
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(MUTATION_DELAY * 5);
+    site.disconnect();
+    expect(restores).toBeLessThan(10);
+  });
+
+  it('stops touching a container that keeps putting back a snapshot that differs, then retries later', async () => {
+    load('<div id="f"><p>Fight 3:30 AM UTC.</p></div><div id="feed"></div>');
+    const f = document.getElementById('f')!;
+    // Taken with the popover open, so it never matches what the annotator makes.
+    icon(marks()[0]!).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+    const snapshot = f.innerHTML;
+    annotator.closePopover();
+    let restores = 0;
+    const site = new MutationObserver(() => {
+      if (restores >= 1000) return site.disconnect();
+      if (f.innerHTML !== snapshot) {
+        restores++;
+        f.innerHTML = snapshot;
+      }
+    });
+    site.observe(f, { childList: true, subtree: true, attributes: true });
+    f.innerHTML = snapshot;
+    await vi.advanceTimersByTimeAsync(MUTATION_DELAY * 20);
+    const settled = restores;
+    expect(settled).toBeLessThanOrEqual(FIGHT_LIMIT + 1);
+    // Paused: the copy is left as it is.
+    expect(f.innerHTML).toBe(snapshot);
+    // Other content is still annotated.
+    document.getElementById('feed')!.innerHTML = '<p>Late 2:30 AM UTC</p>';
+    await settle();
+    expect(document.querySelector('#feed zoneshift-run')).not.toBeNull();
+    // After the back-off it tries again, then pauses for twice as long.
+    await vi.advanceTimersByTimeAsync(BACKOFF_START);
+    const second = restores;
+    expect(second - settled).toBeGreaterThan(0);
+    expect(second - settled).toBeLessThanOrEqual(FIGHT_LIMIT + 1);
+    await vi.advanceTimersByTimeAsync(2 * BACKOFF_START - 4_000);
+    site.disconnect();
+    expect(restores).toBe(second);
+  });
+
+  it('removes a copy of the popover host from a snapshot', async () => {
+    load('<div id="s"><p>At 1:30 AM UTC.</p></div>');
+    document.getElementById('s')!.insertAdjacentHTML('beforeend', `<zoneshift-popover id="${POPOVER_ID}"></zoneshift-popover>`);
+    await settle();
+    expect(document.querySelectorAll('zoneshift-popover')).toHaveLength(0);
+  });
+
   it('stopping removes copies as well', () => {
     load('<div id="slide"><p>Kick-off 1:30 AM UTC</p></div>');
     document.body.insertAdjacentHTML('beforeend', document.getElementById('slide')!.innerHTML);
@@ -666,9 +790,11 @@ describe('copies of annotated markup', () => {
 });
 
 describe('copying', () => {
+  // Dispatched where the browser would: at the element holding the selection.
   const copy = (type = 'copy') => {
-    const event = new ClipboardEvent(type, { clipboardData: new DataTransfer(), bubbles: true, cancelable: true });
-    document.dispatchEvent(event);
+    const event = new ClipboardEvent(type, { clipboardData: new DataTransfer(), bubbles: true, cancelable: true, composed: true });
+    const at = getSelection()!.anchorNode;
+    (at?.nodeType === 1 ? (at as Element) : (at?.parentElement ?? document.body)).dispatchEvent(event);
     return event;
   };
   const select = (el: Node) => {
@@ -678,13 +804,30 @@ describe('copying', () => {
     getSelection()!.addRange(range);
   };
 
-  it('puts the text as shown on the clipboard, without Zoneshift elements', () => {
+  it('puts only the text as shown on the clipboard, with no HTML', () => {
     load('<p id="p">Starts <b>Friday</b> at 1:30 AM UTC sharp.</p>');
     select(document.getElementById('p')!);
     const event = copy();
     expect(event.defaultPrevented).toBe(true);
-    expect(event.clipboardData!.getData('text/html')).toBe('Starts <b>Friday</b> at 5:30 PM PST (−1 day) sharp.');
+    // The browser's own HTML would carry Zoneshift's elements; plain text only.
+    expect(event.clipboardData!.getData('text/html')).toBe('');
     expect(event.clipboardData!.getData('text/plain')).toBe('Starts Friday at 5:30 PM PST (−1 day) sharp.');
+  });
+
+  it('runs before a site handler that stops the event, and lets a later site handler win', () => {
+    load('<div id="own"><p id="p">At 1:30 AM UTC.</p></div>');
+    select(document.getElementById('p')!);
+    const own = document.getElementById('own')!;
+    const stopper = (e: Event) => e.stopPropagation();
+    own.addEventListener('copy', stopper);
+    let event = copy();
+    expect(event.clipboardData!.getData('text/plain')).toBe('At 5:30 PM PST (−1 day).');
+    own.removeEventListener('copy', stopper);
+    const setter = (e: Event) => (e as ClipboardEvent).clipboardData!.setData('text/plain', 'site');
+    own.addEventListener('copy', setter);
+    event = copy();
+    own.removeEventListener('copy', setter);
+    expect(event.clipboardData!.getData('text/plain')).toBe('site');
   });
 
   it('leaves copying alone when nothing selected was annotated', () => {
