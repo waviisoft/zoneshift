@@ -25,6 +25,12 @@ Decisions about Zoneshift, newest first within each section. A spec page holds t
 | Every change has tests | Engine, page and end-to-end, plus a "left alone" test for nearby text. |
 | No AI model names in commits, pull requests or code | |
 
+## Product decisions made during the build (Owner)
+
+| Date | Decision | Detail |
+|---|---|---|
+| 2026-11-13 | Conversions are written into the page's text in place for the first slice, with a known limitation. Showing them without changing the page's own text must be specified and built before any store release. | A site that reads its own page (an editor that builds itself from the page's HTML, or a click-to-edit field filled from the visible text) can save the converted time into its data; no signal arrives in time to put the original back. Reproduced in the review of [#26](https://github.com/waviisoft/zoneshift/pull/26). Accepted for now because nothing is published. Tracked in [#34](https://github.com/waviisoft/zoneshift/issues/34), which blocks [#25](https://github.com/waviisoft/zoneshift/issues/25). |
+
 ## Engine (Build)
 
 Full detail: [Conversion rules](Spec:-Conversion-rules). Also written down in `docs/design.md` and tested in `packages/core/test`. Decided in the first slice and its review ([#26](https://github.com/waviisoft/zoneshift/pull/26)).
