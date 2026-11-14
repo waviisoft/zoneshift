@@ -55,6 +55,13 @@ describe('date and time together', () => {
     expect(la('Nov 13, 2026 10:00 UTC+2')).toBe('Nov 13, 2026 00:00 PST');
     expect(la('Nov 13, 2026 10:00 GMT-5:30')).toBe('Nov 13, 2026 07:30 PST');
   });
+
+  it('reads offsets written with a space or a Unicode minus', () => {
+    expect(la('14:00 UTC −5')).toBe('11:00 PST');
+    expect(la('14:00 UTC -5')).toBe('11:00 PST');
+    expect(la('14:00 GMT + 1')).toBe('05:00 PST');
+    expect(la('14:00 GMT +1')).toBe('05:00 PST');
+  });
 });
 
 describe('time on its own', () => {
@@ -109,6 +116,11 @@ describe('zone interpretation', () => {
     expect(c!.alternatives).toEqual([
       expect.objectContaining({ description: 'China Standard Time', converted: 'Nov 13, 2026 1:00 AM UTC' }),
     ]);
+  });
+
+  it('does not give a spelled-out name the other meanings of its abbreviation', () => {
+    const [c] = findConversions('Nov 13, 2026 9:00 AM Central Standard Time', { targetZone: 'UTC', now: NOW });
+    expect(c).toMatchObject({ converted: 'Nov 13, 2026 3:00 PM UTC', confidence: 'high', flags: [], alternatives: [] });
   });
 
   it('skips text already in the reader’s zone', () => {

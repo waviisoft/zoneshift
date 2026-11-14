@@ -119,7 +119,7 @@ const TABLE: Record<string, Entry> = {
 export const ZONE_TABLE: Readonly<Record<string, Entry>> = TABLE;
 
 const LONG_NAME = /^(Eastern|Central|Mountain|Pacific)(?:\s(Standard|Daylight))?\sTime$/;
-const UTC_OFFSET = /^(?:UTC|GMT)\s?([+\-−])(\d{1,2})(?::?(\d{2}))?$/;
+const UTC_OFFSET = /^(?:UTC|GMT)\s?([+\-−])\s?(\d{1,2})(?::?(\d{2}))?$/;
 const ISO_OFFSET = /^([+\-−])(\d{2})(?::?(\d{2}))?$/;
 
 const abbreviations = Object.keys(TABLE)
@@ -127,9 +127,21 @@ const abbreviations = Object.keys(TABLE)
   .sort((a, b) => b.length - a.length)
   .join('|');
 
-/** Regex source matching a zone label that follows a time. */
+/**
+ * What may not follow the digits of a UTC/GMT offset. In "9 AM UTC-10 AM UTC"
+ * the "-10" is followed by a meridiem and another zone, so it is the start of
+ * the range's second end, not an offset.
+ */
+const NOT_A_TIME =
+  '(?!\\d|:\\d)(?!\\s?[AaPp]\\.?[Mm](?![A-Za-z]))' + `(?!\\s?\\(?(?:UTC|GMT|${abbreviations})(?![A-Za-z]))`;
+
+/**
+ * Regex source matching a zone label that follows a time. A UTC/GMT offset may
+ * be written "UTC+2", "UTC +2", "GMT + 1", "UTC −5" (Unicode minus) or "UTC -5";
+ * "UTC - 5", with a hyphen between spaces, reads as a range and is not an offset.
+ */
 export const ZONE_PATTERN =
-  '(?:UTC|GMT)(?:(?:[+\\-−]|\\s\\+)\\d{1,2}(?::?\\d{2})?(?!\\d))?' +
+  `(?:UTC|GMT)(?:(?:\\s?[+−]\\s?|\\s?-)\\d{1,2}(?::?\\d{2})?${NOT_A_TIME})?` +
   '|(?:Eastern|Central|Mountain|Pacific)(?:\\s(?:Standard|Daylight))?\\sTime' +
   `|(?:${abbreviations})`;
 
@@ -158,9 +170,14 @@ export function resolveZone(token: string): ResolvedZone | null {
   const entry = TABLE[key];
   if (!entry) return null;
   const description = typeof entry.zone === 'string' ? `${entry.name} (${entry.zone})` : entry.name;
+  // A spelled-out standard/daylight name ("Central Standard Time") names one
+  // zone; only its abbreviation ("CST") has other meanings. Generic names keep
+  // their regional variants ("Pacific Time" in British Columbia, "Mountain
+  // Time" in Arizona), because the spelled-out name has those too.
+  const spelledOut = m !== null && m[2] !== undefined;
   return {
     primary: { ref: toRef(entry.zone), description },
     region: entry.region,
-    alternatives: (entry.alts ?? []).map(([name, zone]) => ({ ref: toRef(zone), description: name })),
+    alternatives: spelledOut ? [] : (entry.alts ?? []).map(([name, zone]) => ({ ref: toRef(zone), description: name })),
   };
 }
