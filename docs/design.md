@@ -242,10 +242,15 @@
   looked at again; each further pause doubles, up to 5 minutes. A site that
   keeps fighting therefore costs a few rounds per pause, not one round per
   cycle forever. New content in the same container (a chat appending
-  messages, a clock showing a new time) is not a strike. A list that is
-  re-rendered whole with the same text more than about twice a second (some
-  streaming chats) can be paused for a few seconds; its times then show as
-  written until the pause ends.
+  messages, a clock showing a new time) is not a strike. Known cost: content
+  that is re-rendered whole with the same text more than about twice a second
+  is paused too. That includes a streaming chat message re-rendered on each
+  token, a whole list re-rendered on each update, and a virtual list while it
+  scrolls. Its times show as written until the pause ends (a few seconds after
+  the first stream), and because each pause doubles and never resets, a long
+  session on such a page can reach the 5-minute cap. The budget is keyed by
+  the exact copied text, so a site that changes whitespace on every round is
+  held to the annotation pace but not paused. Tracked in #18.
 - Copying a selection that includes Zoneshift's elements puts only plain
   text on the clipboard: the text as shown, exactly as the browser would copy
   it (line breaks in `pre` and between blocks, table tabs, image alt text,
@@ -256,7 +261,10 @@
 - Copying a selection with no Zoneshift elements is left entirely to the
   browser. Zoneshift's copy handler runs first (window, capture), so a site
   handler that stops the event cannot leave marks on the clipboard; a site
-  handler that sets clipboard data itself still wins. Cut only acts in
+  handler that sets clipboard data itself still wins. When the selection
+  includes Zoneshift's elements, site copy handlers see the event as already
+  default-prevented, so a handler that does nothing in that case skips its
+  work. Cut only acts in
   editable content, where the page's own text is put back first and the
   browser cuts that.
 
