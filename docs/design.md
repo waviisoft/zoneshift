@@ -147,9 +147,14 @@
   - **This is wrong** (not built yet): wrong zone, not a date/time, wrong
     date, day/month swapped, other, plus free text.
 - A `MutationObserver` annotates content added after load, including a
-  replaced `<body>` (Turbo-style navigation). Framework-rendered pages can
-  still overwrite or object to changed text nodes; the planned fallback leaves
-  the text untouched and shows the conversion only in the popover.
+  replaced `<body>` (Turbo-style navigation).
+- Frameworks: a framework that later removes a text node Zoneshift replaced
+  (React, Vue and others keep references to their text nodes) gets a
+  `NotFoundError`, which can unmount a whole React app; and a later in-place
+  update of that text node (setting its `data`) is not shown, because the
+  node is no longer in the page, so the converted time stays stale. Tracked
+  in #18 and #32; the planned fallback leaves the text untouched and shows the
+  conversion only in the popover.
 - A timestamp split across several elements (syntax-highlighted logs) is not
   recognised yet.
 
@@ -173,17 +178,20 @@
   moved into an editor. It is not annotated again while it stays editable. A
   script that switches editing on and reads the HTML in the same task still
   sees the marks.
-- **Known limitation, accepted by the owner for the first slice:** a site that
-  reads its own page before any editing signal reads the converted text and
-  can save it. Examples: an editor that builds itself from the page's HTML, a
-  click-to-edit field filled from the visible text, a same-task `innerHTML`
-  snapshot. Times are rewritten in place for now; showing conversions without
+- **Known limitation, accepted by the owner for the first slice:** times are
+  rewritten in place, so any page script that reads the page gets what
+  Zoneshift put there. A script reading the page's HTML gets Zoneshift's
+  elements and attributes as well as the converted text; a script reading
+  text gets the converted time. This is not limited to editing: an editor
+  that builds itself from the page's HTML, a click-to-edit field filled from
+  the visible text, a same-task `innerHTML` snapshot, a copy-to-clipboard
+  button, client-side search and filters, and form pre-fill all read the
+  converted time, and a site can save it. Showing conversions without
   changing the page's own text is tracked in #34 and must be resolved before
   any store release (#25).
-- Copies of annotated markup are never left as marks: see "Copies" below. A
-  snapshot taken while marks were present and put back later (Cancel in a
-  click-to-edit) becomes the original text again, so a later Save stores the
-  original time.
+- A snapshot taken while marks were present and put back later (Cancel in a
+  click-to-edit) becomes the original text again on the next pass (see
+  "Copies" below), so a later Save stores the original time.
 - When the page's own text comes back while the reader is clicking into it
   or typing (click-to-edit), the caret and selection move to the matching
   place in the original text. Inside a converted time the position is scaled
@@ -213,21 +221,43 @@
 
 - Zoneshift's elements can reach the page as copies it did not make: a
   snapshot put back with `innerHTML`, a cloned carousel slide or template, a
-  paste, a cached page restored by the site. Any copy (a run, a mark, or a
-  stray part of one) is turned back into plain original text as soon as it
-  appears, then annotated again like any new text if its place allows, so a
-  cloned slide gets working icons and follows the page-wide choice. In
-  editable content it stays plain original text.
-- Copying a selection that includes annotated text puts the text as shown on
-  the clipboard: plain text exactly as the browser would copy it, and HTML
-  with the page's own structure but no Zoneshift elements or attributes.
-  This is what the reader saw and selected; the converted text carries its
-  own zone name, so it stays correct where it is pasted. Page styles are not
-  carried in that HTML.
-- Copying a selection with no annotated text is left entirely to the
-  browser, and so is any copy the site handles itself (Zoneshift runs last
-  and steps aside if the site has already set the clipboard). Cut only acts
-  in editable content, where the page's own text is put back first and the
+  paste, a cached page restored by the site, a popover host captured in a
+  snapshot. Any copy (a run, a mark, a stray part of one, or a popover host)
+  is turned back into plain original text, or removed, on the next pass of
+  the observer (after the same short delay as added content, never in the
+  same microtask, so a site that puts its snapshot back from its own
+  observer cannot ping-pong with it). It is then annotated again like any
+  new text if its place allows, so a cloned slide gets working icons and
+  follows the page-wide choice. In editable content it stays plain original
+  text. Clicking or pressing Enter on a copy's icon before that pass runs it
+  at once and opens the replacement's popover.
+- Copies inside shadow roots and iframes are not seen: they stay as they
+  are, showing the converted text with icons that do nothing.
+- Fight budget: each copied text that has to be turned back counts a strike,
+  and so does a container where the page removes a run of ours less than a
+  second after it was made and puts the same text back (a site restoring its
+  own text, #18). Five strikes within two seconds pause that copied text or
+  that container: copies of it are left as they are and nothing inside the
+  container is annotated. The pause lasts 5 seconds, then the content is
+  looked at again; each further pause doubles, up to 5 minutes. A site that
+  keeps fighting therefore costs a few rounds per pause, not one round per
+  cycle forever. New content in the same container (a chat appending
+  messages, a clock showing a new time) is not a strike. A list that is
+  re-rendered whole with the same text more than about twice a second (some
+  streaming chats) can be paused for a few seconds; its times then show as
+  written until the pause ends.
+- Copying a selection that includes Zoneshift's elements puts only plain
+  text on the clipboard: the text as shown, exactly as the browser would copy
+  it (line breaks in `pre` and between blocks, table tabs, image alt text,
+  unselectable content left out). No HTML is put on the clipboard, because
+  the browser's own HTML would carry Zoneshift's elements; a rich paste of
+  such a selection therefore loses links and formatting. The converted text
+  carries its own zone name, so it stays correct where it is pasted.
+- Copying a selection with no Zoneshift elements is left entirely to the
+  browser. Zoneshift's copy handler runs first (window, capture), so a site
+  handler that stops the event cannot leave marks on the clipboard; a site
+  handler that sets clipboard data itself still wins. Cut only acts in
+  editable content, where the page's own text is put back first and the
   browser cuts that.
 
 **Text-node boundaries**
