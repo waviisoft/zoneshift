@@ -173,6 +173,21 @@
   moved into an editor. It is not annotated again while it stays editable. A
   script that switches editing on and reads the HTML in the same task still
   sees the marks.
+- **Known limitation, accepted by the owner for the first slice:** a site that
+  reads its own page before any editing signal reads the converted text and
+  can save it. Examples: an editor that builds itself from the page's HTML, a
+  click-to-edit field filled from the visible text, a same-task `innerHTML`
+  snapshot. Times are rewritten in place for now; showing conversions without
+  changing the page's own text is tracked in #34 and must be resolved before
+  any store release (#25).
+- Copies of annotated markup are never left as marks: see "Copies" below. A
+  snapshot taken while marks were present and put back later (Cancel in a
+  click-to-edit) becomes the original text again, so a later Save stores the
+  original time.
+- When the page's own text comes back while the reader is clicking into it
+  or typing (click-to-edit), the caret and selection move to the matching
+  place in the original text. Inside a converted time the position is scaled
+  to the original's length.
 
 **Page structure**
 
@@ -186,8 +201,34 @@
   everything from the page; the icon's own rules are `!important`, so broad
   page rules (`.meta *`, `*::before`) cannot distort it. These rules apply
   only to Zoneshift's elements; page text is never given a value of ours.
+- Each mark carries the text it replaced (`data-zs-original`), so any copy of
+  it can be turned back into exactly the original text.
 - Stopping (extension updated, disabled or removed) restores every original
-  text node.
+  text node, and turns any copies back into plain text.
+- Adding the wrapper and icon can change which neighbouring elements the
+  site's sibling and child selectors match (`:last-child`, `:only-child`,
+  `* + *`, `:empty`). This is inherent to inserting any icon into the page.
+
+**Copies**
+
+- Zoneshift's elements can reach the page as copies it did not make: a
+  snapshot put back with `innerHTML`, a cloned carousel slide or template, a
+  paste, a cached page restored by the site. Any copy (a run, a mark, or a
+  stray part of one) is turned back into plain original text as soon as it
+  appears, then annotated again like any new text if its place allows, so a
+  cloned slide gets working icons and follows the page-wide choice. In
+  editable content it stays plain original text.
+- Copying a selection that includes annotated text puts the text as shown on
+  the clipboard: plain text exactly as the browser would copy it, and HTML
+  with the page's own structure but no Zoneshift elements or attributes.
+  This is what the reader saw and selected; the converted text carries its
+  own zone name, so it stays correct where it is pasted. Page styles are not
+  carried in that HTML.
+- Copying a selection with no annotated text is left entirely to the
+  browser, and so is any copy the site handles itself (Zoneshift runs last
+  and steps aside if the site has already set the clipboard). Cut only acts
+  in editable content, where the page's own text is put back first and the
+  browser cuts that.
 
 **Text-node boundaries**
 
@@ -213,8 +254,13 @@
   and pointer presses on the icon never reach the page's own handlers or a
   surrounding link or button.
 - Opening moves focus to the popover's first button; Tab and Shift+Tab cycle
-  through its buttons. Escape, or choosing an action, closes it and returns
-  focus to the icon. Focus moving elsewhere (a click) closes it.
+  through its buttons, so it is marked `aria-modal="true"`. Escape, or
+  choosing an action, closes it and returns focus to the icon. Focus moving
+  elsewhere (a click) closes it. If the page removes the time while the
+  popover is open, the popover closes; focus then falls back to the page.
+- The popover sits in the top layer where the browser supports it, and
+  inside an open modal `<dialog>` or fullscreen element that holds the time,
+  so it is never behind the dialog or inert.
 - Escape is taken only while the popover is open, so it never also closes a
   site's dialog; with the popover closed, every key is the page's.
 - The popover closes when the page or a container around the icon scrolls,
@@ -270,5 +316,8 @@ arrives with settings, once agreed.
    fallback.
 4. Settings and feedback flow.
 5. Safari on macOS, then iOS.
-6. Store releases and automated packaging.
+6. Store releases and automated packaging. Blocked on #34: showing
+   conversions without changing the page's own text, so sites that read
+   their page before any editing signal never read converted times (see
+   "Never touched").
 7. Later: more languages, the bundled domain-to-zone list.
