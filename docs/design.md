@@ -14,11 +14,46 @@
 
 **When to convert**
 
+- A wrong conversion is worse than a missed one. When the engine cannot be
+  sure, it leaves the text alone.
 - Only when the source zone is known. In order of trust: a zone in the text
   (`UTC`, `GMT+2`, `EST`, ISO 8601 offsets), then the user's default zone for
   the site, then (future) a bundled domain-to-zone list. Otherwise leave alone.
+- The site default is not applied to a time next to a zone written in words
+  that the engine does not resolve: "7 PM Pacific", "8 PM Eastern",
+  "7 PM London time", "7 PM local time", "7 PM (London)", "Pacific: 7 PM".
 - Text already in the reader's zone is left alone.
 - Date-only text and relative phrases ("in 3 hours") are left alone.
+- A time directly next to a date or day name the engine does not read
+  ("07/04/2026 6:00 PM UTC", "july 4, 2026 at…", "2026-W46-5T01:30Z",
+  "tomorrow at 6 PM UTC", "1 AM UTC on Mondays") is left alone, rather than
+  converted as if it were today.
+- A weekday that contradicts its date ("Friday, November 14, 2026", a
+  Saturday) is left alone: one of them is wrong and we cannot tell which.
+- A date without a year but with a weekday ("Sat, Jan 9") is read in the year,
+  nearest to today, in which that date has that weekday; if none of last,
+  this or next year matches, it is left alone. Without a weekday, the current
+  year is assumed.
+
+**Ranges and lists**
+
+- A range ("1:30 PM UTC – 3:00 PM UTC", "9 AM UTC-10 AM UTC") or list
+  ("1:30 PM UTC or 3:00 PM UTC", "3 PM ET / 12 PM PT") is converted only when
+  every end carries its own zone, and then whole or not at all: if one end
+  cannot be read, none is converted.
+- Ranges and lists where only the last end has a zone ("1:30–3:00 PM UTC",
+  "between 1:30 PM and 3:00 PM UTC", "1:30 or 3:00 PM UTC", "1:30/3:00 PM UTC",
+  "9 till 5 PM ET") are left alone, and so are zone-less ranges under a site
+  default ("7 PM–9 PM").
+- Weekday ranges and lists ("Mon–Fri 1 AM UTC", "Sat & Sun",
+  "Mon, Wed, Fri at…") are left alone: shifting one named day would mislead.
+- A later end without a date takes the date of the end before it. A range end
+  is the first such time after the start, so "Jul 13 11:30 PM UTC – 1:30 AM
+  UTC" ends on 14 July; equal ends, ends more than a day apart, and ranges that
+  run backwards are left alone. A list item takes the same date.
+- A date written only after the last end ("1:30 PM UTC – 3:00 PM UTC on
+  Friday, Nov 13") belongs to every end, which the engine cannot yet show, so
+  the range is left alone.
 
 **Zone labels**
 
@@ -33,6 +68,14 @@
   local time).
 - `MST`, `HST` and `AEST` are always read literally, because parts of their
   regions do not observe daylight saving.
+- A spelled-out standard/daylight name ("Central Standard Time") has one
+  meaning; only the abbreviation (`CST`) gets the alternatives.
+- A time given for several zones at once ("8 PM ET/PT", "8 PM ET/7c") is left alone.
+- Offsets may be written `UTC+2`, `UTC +2`, `GMT + 1`, `UTC −5` (Unicode minus)
+  or `UTC -5`. `UTC - 5`, with a hyphen between spaces, could be a range and is
+  left alone; a UTC/GMT time is never converted while ignoring an offset after
+  it. `UTC-10` followed by a meridiem or another zone ("9 AM UTC-10 AM UTC")
+  is the second end of a range, not an offset.
 
 **Output**
 
@@ -40,15 +83,22 @@
   ordinals, padding, punctuation.
 - With a date, the weekday, day, month and year are re-rendered.
 - A time on its own assumes today's date in the source zone and gets
-  `(+1 day)` / `(−1 day)` when the day changes.
+  `(+1 day)` / `(−1 day)` when the day changes. In a time-only range, each
+  end's marker is measured from the day the range starts.
+- A `Z` time without an ISO date ("10:00Z") is shown with the zone name
+  ("02:00 PST"), because a numeric offset glued to it would read as a range.
+  Full ISO timestamps keep a numeric offset.
 - A weekday with no date ("Friday at 1:30 AM UTC") shifts the weekday.
 - A zone-less time converted through a site default gets the target zone name
   appended and an "assumed zone" flag.
 
 **Not handled yet**
 
-- Ranges ("1:30–3:00 PM UTC") are skipped unless each end has its own zone.
-- Numeric dates (`03/04/2026`), two-digit years, all-caps month names.
+- Ranges and lists whose ends do not each carry a zone (see above).
+- Numeric dates (`03/04/2026`), two-digit years, all-caps or lower-case month
+  names: a time next to one is left alone.
+- A date elsewhere in the sentence ("On July 4 the show starts at 6 PM UTC")
+  is not linked to the time, which is read as today.
 - Languages other than English.
 - `<time datetime>` elements (highest-confidence source; annotator work).
 - Zone names come from the browser's `Intl` data, so some zones render as
