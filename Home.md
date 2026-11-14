@@ -24,6 +24,12 @@ Decisions and their reasons are recorded in the [Decision log](Decision-log).
 | [Time ranges](Spec:-Time-ranges) | [#11](https://github.com/waviisoft/zoneshift/issues/11) | Draft |
 | [Settings](Spec:-Settings) | [#20](https://github.com/waviisoft/zoneshift/issues/20) | Draft |
 
+## Evaluations
+
+| Evaluation | Issue | Status |
+|---|---|---|
+| [Shadow DOM rendering](Evaluation:-Shadow-DOM-rendering) | [#34](https://github.com/waviisoft/zoneshift/issues/34) | Awaiting owner decision |
+
 ## The first slice
 
-The conversion engine, clock icon, popover, opt-in log and ISO timestamps, and late-added content (issues #2–#10) were built from `docs/design.md` in [pull request #26](https://github.com/waviisoft/zoneshift/pull/26). The two *As built* pages record what it does and the decisions made in its review.
+The conversion engine, clock icon, popover, opt-in log and ISO timestamps, and late-added content (issues #2–#10) were built from `docs/design.md` and merged in [pull request #26](https://github.com/waviisoft/zoneshift/pull/26). The two *As built* pages record what it does and the decisions made in its review.
