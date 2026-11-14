@@ -62,9 +62,18 @@ const RANGE_BEFORE = new RegExp(
   `(?:(?:\\d{1,2}:\\d{2}(?::\\d{2})?|${MER})\\s*(?:${RANGE_WORD}|${LIST_WORD})\\s*` +
     `|(?<![\\d:.])\\d{1,2}(?:\\s*[-–—−~/&]\\s*|\\s+(?:to|until|till|til|through|thru|and|or)\\s+))$`,
 );
-/** "noon to 9 PM ET", "9 PM ET – midnight": a range end the engine does not read. */
-const NOON_BEFORE = new RegExp(`(?<![A-Za-z])(?:noon|midnight)\\s*(?:${RANGE_WORD}|${LIST_WORD})\\s*$`, 'i');
-const NOON_AFTER = new RegExp(`^\\s*(?:${RANGE_WORD}|${LIST_WORD})\\s*(?:noon|midnight)(?![A-Za-z])`, 'i');
+/**
+ * "noon to 9 PM ET", "noon UTC – 3 PM UTC", "9 PM ET – midnight": a range end
+ * the engine does not read as a time. Words in any case; a zone label between
+ * the word and the separator is matched case-sensitively, like everywhere else.
+ */
+const anyCase = (src: string) => src.replace(/[a-z]/g, (ch) => `[${ch}${ch.toUpperCase()}]`);
+const NOON = anyCase('(?:noon|midnight|midday)');
+const NOON_SEPARATOR = `(?:${anyCase(RANGE_WORD)}|${anyCase(LIST_WORD)})`;
+const NOON_BEFORE = new RegExp(
+  `(?<![A-Za-z])${NOON}(?:\\s*\\(?\\s*(?:${ZONE_PATTERN})\\s*\\)?)?\\s*${NOON_SEPARATOR}\\s*$`,
+);
+const NOON_AFTER = new RegExp(`^\\s*${NOON_SEPARATOR}\\s*${NOON}(?![A-Za-z])`);
 /** A sign between a bare UTC/GMT and the next time ("2 PM UTC −3 PM UTC"). */
 const SIGN_BEFORE = /(?:UTC|GMT)\s*[+\-−]\s*$/;
 /** Text after a match that makes it the earlier end of a range or list. */
@@ -471,7 +480,9 @@ function applyGuards(text: string, cands: Candidate[]): void {
       if (!c.zoneToken || !prev!.zoneToken) drop();
     } else {
       const before24 = text.slice(Math.max(prev?.end ?? 0, c.start - 24), c.start);
-      if (RANGE_BEFORE.test(before24) || NOON_BEFORE.test(before24)) drop();
+      if (RANGE_BEFORE.test(before24)) drop();
+      // Wider: "midnight Eastern Standard Time until " is 37 characters.
+      if (NOON_BEFORE.test(text.slice(Math.max(prev?.end ?? 0, c.start - 48), c.start))) drop();
       // "2 PM UTC −3 PM UTC": the sign is not a range dash, and not an offset we read.
       if (SIGN_BEFORE.test(text.slice(Math.max(0, c.start - 8), c.start))) drop();
     }

@@ -45,7 +45,8 @@
   "between 1:30 PM and 3:00 PM UTC", "1:30 or 3:00 PM UTC", "1:30/3:00 PM UTC",
   "9 till 5 PM ET") are left alone, and so are zone-less ranges under a site
   default ("7 PM–9 PM") and ranges with an end the engine does not read as a
-  time ("9 AM ET to noon", "9 PM ET – midnight").
+  time ("9 AM ET to noon", "noon UTC – 3 PM UTC", "9 PM ET – midnight ET";
+  also "midday", in any case, with or without a zone after the word).
 - Weekday ranges and lists ("Mon–Fri 1 AM UTC", "Sat & Sun",
   "Mon, Wed, Fri at…") are left alone: shifting one named day would mislead.
 - A later end without a date takes the date of the end before it. A range end

@@ -192,8 +192,38 @@ describe('a range ending at noon or midnight', () => {
     },
   );
 
+  it.each([
+    // A zone label between the word and the separator.
+    'noon UTC – 3 PM UTC',
+    'midnight UTC – 2 AM UTC',
+    'noon ET to 9 PM ET',
+    'Noon (UTC) - 3 PM UTC',
+    'MIDNIGHT Eastern Time until 2 AM ET',
+    '12 noon UTC – 3 PM UTC',
+    'midday UTC – 3 PM UTC',
+    // Every separator the range and list rules know.
+    'from noon UTC through 3 PM UTC',
+    'noon UTC thru 3 PM UTC',
+    'noon UTC till 3 PM UTC',
+    'noon UTC ~ 3 PM UTC',
+    'noon UTC—3 PM UTC',
+    'between noon UTC and 3 PM UTC',
+    'noon UTC or 3 PM UTC',
+    'noon UTC/3 PM UTC',
+    'noon UTC & 3 PM UTC',
+    // Mirrored: the word is the later end.
+    '9 AM UTC – noon UTC',
+    '9 PM ET to midnight ET',
+    '9 AM UTC to 12 noon UTC',
+    '9 AM UTC – Midday',
+  ])('%s (target Los Angeles)', (text) => {
+    expect(la(text)).toBe(text);
+  });
+
   it('still converts a time in the same sentence as noon', () => {
     expect(to('UTC')('Lunch at noon, call at 3 PM ET')).toBe('Lunch at noon, call at 8 PM UTC');
+    expect(la('Lunch at noon UTC, call at 3 PM UTC')).toBe('Lunch at noon UTC, call at 7 AM PST');
+    expect(la('noon UTC: call at 3 PM UTC')).toBe('noon UTC: call at 7 AM PST');
   });
 });
 
