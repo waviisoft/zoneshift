@@ -13,12 +13,6 @@
     "dev": "pnpm --filter @zoneshift/extension dev",
     "e2e": "pnpm --filter @zoneshift/extension build:chrome && pnpm --filter @zoneshift/extension e2e"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "spawn-sync"
-    ]
-  },
   "devDependencies": {
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
