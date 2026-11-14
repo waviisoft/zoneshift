@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { convertText, findConversions } from '../src';
 import { ianaOffsetAt } from '../src/tz';
 import { ZONE_TABLE } from '../src/zones';
@@ -156,4 +156,29 @@ describe('zone table', () => {
       expect(offsets).toContain(entry.zone);
     },
   );
+});
+
+describe('performance', () => {
+  const RealDateTimeFormat = Intl.DateTimeFormat;
+  afterEach(() => {
+    Intl.DateTimeFormat = RealDateTimeFormat;
+  });
+
+  it('reuses date formatters across matches', () => {
+    const text = '1:30 PM UTC, then '.repeat(500);
+    la(text); // warm the caches
+    let created = 0;
+    Intl.DateTimeFormat = new Proxy(RealDateTimeFormat, {
+      construct(target, args) {
+        created++;
+        return new target(...(args as ConstructorParameters<typeof Intl.DateTimeFormat>));
+      },
+      apply(target, _this, args) {
+        created++;
+        return target(...(args as ConstructorParameters<typeof Intl.DateTimeFormat>));
+      },
+    });
+    expect(findConversions(text, { targetZone: LA, now: NOW })).toHaveLength(500);
+    expect(created).toBe(0);
+  });
 });

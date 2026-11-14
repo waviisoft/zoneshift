@@ -77,13 +77,16 @@ export function fieldsAt(zone: ZoneRef, epochMs: number): Fields & { weekday: nu
   };
 }
 
+const nameFormatters = new Map<string, Intl.DateTimeFormat>();
+
 /** Short display name of an IANA zone at an instant, e.g. "PST". */
 export function shortZoneName(zone: string, epochMs: number): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: zone,
-    timeZoneName: 'short',
-  }).formatToParts(epochMs);
-  return parts.find((p) => p.type === 'timeZoneName')?.value ?? zone;
+  let f = nameFormatters.get(zone);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'short' });
+    nameFormatters.set(zone, f);
+  }
+  return f.formatToParts(epochMs).find((p) => p.type === 'timeZoneName')?.value ?? zone;
 }
 
 export function formatOffset(offsetMinutes: number, colon: boolean): string {
