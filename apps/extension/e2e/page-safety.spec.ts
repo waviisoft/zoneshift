@@ -352,3 +352,156 @@ test('SVG and XML documents are left alone', async ({ page, base }) => {
   expect(await page.evaluate(() => document.querySelector('when')!.textContent)).toBe('1:30 AM UTC');
   expect(await page.evaluate(() => document.getElementsByTagName('zoneshift-run').length)).toBe(0);
 });
+
+pages['/copies'] = {
+  body: html(`${READY}
+    <div id="e1"><p>Meeting at 1:30 AM UTC.</p></div>
+    <button id="edit">Edit</button><button id="cancel">Cancel</button><button id="save">Save</button>
+    <div id="slide"><p>Kick-off 2:30 AM UTC</p></div>
+    <p id="src">Launch on Friday, November 13, 2026, at 1:30 AM UTC sharp.</p>
+    <div id="ed" contenteditable="true"></div>`),
+};
+test('edit, cancel from a snapshot, edit, save: the site saves the original time', async ({ page, base }) => {
+  await open(page, `${base}/copies`);
+  await page.locator('#e1 .zoneshift').waitFor();
+  // A common click-to-edit: snapshot for Cancel taken as editing starts.
+  await page.evaluate(() => {
+    const w = window as unknown as { saved: string[] };
+    w.saved = [];
+    const e = document.getElementById('e1')!;
+    let snapshot = '';
+    document.getElementById('edit')!.onclick = () => {
+      e.contentEditable = 'true';
+      snapshot = e.innerHTML;
+      e.focus();
+    };
+    document.getElementById('cancel')!.onclick = () => {
+      e.innerHTML = snapshot;
+      e.contentEditable = 'false';
+    };
+    document.getElementById('save')!.onclick = () => {
+      w.saved.push(e.innerHTML);
+      e.contentEditable = 'false';
+    };
+  });
+  await page.click('#edit');
+  await page.click('#cancel');
+  // After Cancel the time is converted again, with a working icon.
+  await expect(page.locator('#e1')).toHaveText('Meeting at 5:30 PM PST (−1 day).');
+  await page.locator('#e1 .zoneshift-icon').click();
+  await expect(page.getByRole('dialog', { name: 'Zoneshift' })).toContainText('1:30 AM UTC');
+  await page.keyboard.press('Escape');
+  await page.click('#edit');
+  await page.click('#save');
+  expect(await page.evaluate(() => (window as unknown as { saved: string[] }).saved)).toEqual([
+    '<p>Meeting at 1:30 AM UTC.</p>',
+  ]);
+});
+test('a cloned slide gets a working icon that follows the page-wide choice', async ({ page, base }) => {
+  await open(page, `${base}/copies`);
+  await page.locator('#slide .zoneshift').waitFor();
+  await page.evaluate(() => {
+    const copy = document.getElementById('slide')!.cloneNode(true) as HTMLElement;
+    copy.id = 'copy';
+    document.body.append(copy);
+  });
+  await expect(page.locator('#copy')).toHaveText('Kick-off 6:30 PM PST (−1 day)');
+  await page.locator('#copy .zoneshift-icon').click();
+  await page.getByRole('button', { name: 'Show all originals on this page' }).click();
+  await expect(page.locator('#copy')).toHaveText('Kick-off 2:30 AM UTC');
+  await expect(page.locator('#slide')).toHaveText('Kick-off 2:30 AM UTC');
+});
+test('copying puts the shown text on the clipboard, and pasting into an editor carries no marks', async ({
+  page,
+  base,
+  context,
+}) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+  await open(page, `${base}/copies`);
+  await page.locator('#src .zoneshift').waitFor();
+  const shown = await page.locator('#src').innerText();
+  await page.evaluate(() => {
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById('src')!);
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+  });
+  await page.keyboard.press('Control+C');
+  const clip = await page.evaluate(async () => {
+    const out: Record<string, string> = {};
+    for (const item of await navigator.clipboard.read()) {
+      for (const type of item.types) out[type] = await (await item.getType(type)).text();
+    }
+    return out;
+  });
+  expect(clip['text/plain']).toBe(shown);
+  expect(clip['text/html']).toContain('Thursday, November 12, 2026, at 5:30 PM PST');
+  expect(clip['text/html']).not.toMatch(/zoneshift|data-zs-/);
+  await page.locator('#ed').click();
+  await page.keyboard.press('Control+V');
+  await expect(page.locator('#ed')).toContainText('5:30 PM PST');
+  expect(await page.locator('#ed').innerHTML()).not.toMatch(/zoneshift|data-zs-/);
+});
+
+pages['/modal'] = {
+  body: html(`${READY}<dialog id="dlg"><p id="dp">Event at 2:30 AM UTC</p><button id="close">Close</button></dialog>`),
+};
+test('the popover works inside a modal dialog', async ({ page, base }) => {
+  await open(page, `${base}/modal`);
+  await page.evaluate(() => (document.getElementById('dlg') as HTMLDialogElement).showModal());
+  await page.locator('#dp .zoneshift-icon').click();
+  const dialog = page.getByRole('dialog', { name: 'Zoneshift' });
+  await expect(dialog).toBeVisible();
+  // On top of the modal and focusable, not behind it and inert.
+  const r = await page.evaluate(() => {
+    const host = document.getElementById('zoneshift-popover')!;
+    const button = host.shadowRoot!.querySelector('button')!;
+    const box = button.getBoundingClientRect();
+    return {
+      hit: document.elementFromPoint(box.left + 5, box.top + 5) === host,
+      focused: host.shadowRoot!.activeElement === button,
+    };
+  });
+  expect(r).toEqual({ hit: true, focused: true });
+  await dialog.getByRole('button', { name: 'Show original here' }).click();
+  await expect(page.locator('#dp')).toHaveText('Event at 2:30 AM UTC');
+  // Escape closes only the popover; the site's dialog stays open.
+  await page.locator('#dp .zoneshift-icon').click();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  expect(await page.evaluate(() => (document.getElementById('dlg') as HTMLDialogElement).open)).toBe(true);
+});
+
+pages['/caret'] = {
+  body: html(`${READY}
+    <div id="c1"><p>Call at 4:30 AM UTC today please.</p></div>
+    <div id="c2" tabindex="-1"><p>Review at 4:30 AM UTC today please.</p></div>`),
+};
+test('click-to-edit keeps the caret where the reader clicked', async ({ page, base }) => {
+  await open(page, `${base}/caret`);
+  await page.locator('#c2 .zoneshift').waitFor();
+  await page.evaluate(() => {
+    const c1 = document.getElementById('c1')!;
+    c1.addEventListener('mousedown', () => (c1.contentEditable = 'true'));
+    const c2 = document.getElementById('c2')!;
+    c2.addEventListener('click', () => {
+      c2.contentEditable = 'true';
+      c2.focus();
+    });
+  });
+  for (const id of ['c1', 'c2']) {
+    // Click inside the word "today", after the time.
+    const box = await page.locator(`#${id} zoneshift-run`).evaluate((run) => {
+      const text = run.lastChild as Text;
+      const range = document.createRange();
+      range.setStart(text, text.data.indexOf('today') + 2);
+      range.setEnd(text, text.data.indexOf('today') + 3);
+      const r = range.getBoundingClientRect();
+      return { x: r.left + 1, y: r.top + r.height / 2 };
+    });
+    await page.mouse.click(box.x, box.y);
+    await page.keyboard.type('X');
+    const word = id === 'c1' ? 'Call' : 'Review';
+    await expect(page.locator(`#${id}`)).toHaveText(`${word} at 4:30 AM UTC toXday please.`);
+  }
+});
