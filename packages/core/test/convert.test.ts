@@ -62,6 +62,26 @@ describe('date and time together', () => {
     expect(la('14:00 GMT + 1')).toBe('05:00 PST');
     expect(la('14:00 GMT +1')).toBe('05:00 PST');
   });
+
+  it('mirrors the hour padding of the original next to an ISO date', () => {
+    expect(la('2026-11-13 1:00 PM UTC')).toBe('2026-11-13 5:00 AM PST');
+  });
+
+  it('picks the year in which a written weekday falls on a year-less date', () => {
+    // On 2026-11-11, "Sat, Jan 9" is 9 January 2027.
+    expect(la('Sat, Jan 9 at 1 AM UTC')).toBe('Fri, Jan 8 at 5 PM PST');
+    const [c] = findConversions('Sat, Jan 9 at 1 AM UTC', { targetZone: LA, now: NOW });
+    expect(c!.epochMs).toBe(Date.UTC(2027, 0, 9, 1));
+    // The previous year when that is the nearest match: on 2027-01-05, "Sat, Dec 26" is 2026.
+    expect(to(LA, Date.UTC(2027, 0, 5))('Sat, Dec 26 at 1 AM UTC')).toBe('Fri, Dec 25 at 5 PM PST');
+    // Without a weekday the current year is assumed.
+    expect(la('Jan 9 at 1 AM UTC')).toBe('Jan 8 at 5 PM PST');
+  });
+
+  it('leaves a year-less date alone when no nearby year has that weekday', () => {
+    // 9 January is a Friday in 2026, a Saturday in 2027, and a Thursday in 2025.
+    expect(la('Sun, Jan 9 at 1 AM UTC')).toBe('Sun, Jan 9 at 1 AM UTC');
+  });
 });
 
 describe('time on its own', () => {
@@ -85,6 +105,11 @@ describe('time on its own', () => {
 
   it('keeps the marker outside parentheses', () => {
     expect(la('1:30 AM (UTC)')).toBe('5:30 PM (PST) (−1 day)');
+  });
+
+  it('names the zone for a Zulu time without a date', () => {
+    expect(la('TAF valid from 10:00Z')).toBe('TAF valid from 02:00 PST');
+    expect(to('Asia/Tokyo')('valid from 18:00Z')).toBe('valid from 03:00 GMT+9 (+1 day)');
   });
 });
 
@@ -168,6 +193,14 @@ describe('zone table', () => {
       expect(offsets).toContain(entry.zone);
     },
   );
+});
+
+describe('options', () => {
+  it('returns no conversions for an invalid target zone', () => {
+    expect(findConversions('1:30 PM UTC', { targetZone: 'Not/AZone', now: NOW })).toEqual([]);
+    expect(findConversions('1:30 PM UTC', { targetZone: '', now: NOW })).toEqual([]);
+    expect(convertText('1:30 PM UTC', { targetZone: 'Not/AZone', now: NOW })).toBe('1:30 PM UTC');
+  });
 });
 
 describe('performance', () => {

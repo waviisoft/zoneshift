@@ -12,7 +12,6 @@ const WD = '(?:Mon(?:day)?|Tue(?:s(?:day)?)?|Wed(?:nesday)?|Thu(?:rs?(?:day)?)?|
 const MON =
   '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
 const MER = '[AaPp](?:\\.[Mm]\\.|[Mm])';
-const RANGE_WORD = '(?:[-–—]|to|until|through)';
 
 const START = '(?<![A-Za-z\\d])';
 const END = '(?![A-Za-z\\d])';
@@ -45,12 +44,90 @@ const RIGHT_DATES = [
   new RegExp(`${RIGHT_JOIN}(?<wd>${WD})${END}`, 'd'),
 ];
 
-/** Text before a match that makes it the end of a range ("1:30–3:00 PM UTC"). */
+/** Words and marks that join the ends of a range ("1–3 PM", "9 till 5"). */
+const RANGE_WORD = '(?:[-–—−~]|to|until|till|til|through|thru)';
+/** Words and marks that join the items of a list ("1:30 or 3:00", "1:30/3:00"). */
+const LIST_WORD = '(?:and|or|&|/|,)';
+
+/**
+ * Text before a match that makes it the later end of a range or list whose
+ * earlier end has no zone of its own ("1:30–3:00 PM UTC", "9 till 5 PM ET").
+ */
 const RANGE_BEFORE = new RegExp(
-  `(?:(?:\\d{1,2}:\\d{2}(?::\\d{2})?|${MER})\\s?${RANGE_WORD}\\s?|(?<![\\d:.])\\d{1,2}(?:[-–—]|\\s(?:to|until|through)\\s))$`,
+  `(?:(?:\\d{1,2}:\\d{2}(?::\\d{2})?|${MER})\\s*(?:${RANGE_WORD}|${LIST_WORD})\\s*` +
+    `|(?<![\\d:.])\\d{1,2}(?:\\s*[-–—−~/&]\\s*|\\s+(?:to|until|till|til|through|thru|and|or)\\s+))$`,
 );
-/** Text after a match that makes it the start of a range. */
-const RANGE_AFTER = new RegExp(`^\\s?${RANGE_WORD}\\s?(?=\\d)`);
+/** Text after a match that makes it the earlier end of a range or list. */
+const RANGE_AFTER = new RegExp(
+  `^\\s*(?:${RANGE_WORD}\\s*(?=\\d)|${LIST_WORD}\\s*(?=\\d{1,2}(?::\\d{2}|\\s?${MER})))`,
+);
+/** The text between two recognised times that makes them one range or list. */
+const GAP_RANGE = new RegExp(`^\\s*${RANGE_WORD}\\s*$`);
+const GAP_LIST = new RegExp(`^\\s*(?:,\\s*)?${LIST_WORD}\\s*$`);
+const GAP_MAX = 16;
+
+/** A date that follows the time but is directly followed by another time belongs to that time. */
+const TIME_NEXT = new RegExp(`^\\s*,?\\s*(?:at\\s+|@\\s*)?\\d{1,2}(?::\\d{2}|\\s?${MER})`);
+
+/*
+ * Dates and day names the engine does not read. A time directly next to one is
+ * left alone: converting it as if it were today would give the wrong date and,
+ * near a daylight-saving change, the wrong offset.
+ */
+const UPPER = (src: string) => src.replace(/[a-z]+/g, (w) => w.toUpperCase());
+const MON_ANY_CASE_WITH_DAY =
+  `(?<![A-Za-z])${MON}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:\\s*[-–—]\\s*\\d{1,2}(?:st|nd|rd|th)?)?(?:,?\\s+\\d{4})?` +
+  `|(?<!\\d)\\d{1,2}(?:st|nd|rd|th)?(?:\\s*[-–—]\\s*\\d{1,2}(?:st|nd|rd|th)?)?\\s+(?:of\\s+)?${MON}\\.?(?:,?\\s+\\d{4})?`;
+const UNREAD_DATE_I = [
+  // Numeric dates: 07/04/2026, 4.7.2026, 2026-07-04, 7/4.
+  '\\d{1,4}[./-]\\d{1,2}[./-]\\d{1,4}',
+  '(?<![\\d:])\\d{1,2}/\\d{1,2}(?![\\d:])',
+  // ISO week and ordinal dates: 2026-W46-5, 2026W465, 2026-315.
+  '\\d{4}-?W\\d{2}(?:-?\\d)?',
+  '(?<!\\d)\\d{4}-\\d{3}(?!\\d)',
+  // A year on its own.
+  '(?<![\\d.:/-])(?:1[89]|2\\d)\\d{2}(?![\\d:])',
+  // A month in any letter case, with a day: "july 4", "JULY 4, 2026", "4 JULY".
+  MON_ANY_CASE_WITH_DAY,
+  // Full day names (also plural: "on Mondays") and month names in any case, and relative days.
+  '(?<![A-Za-z])(?:(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?|january|february|april|june|july|august|september|october|november|december|tomorrow|yesterday)(?![A-Za-z])',
+].join('|');
+/** Capitalised or all-caps day and month names (including short forms), alone. */
+const UNREAD_DATE_CASED = `(?<![A-Za-z])(?:${WD}|${MON}|${UPPER(WD)}|${UPPER(MON)})(?![A-Za-z])\\.?`;
+const JOIN_WORDS = '(?:at|on|from|in|by|of|to|through|thru|till|until|and|or)';
+const LEFT_JOIN_ANY = `[\\s,;:()\\[\\]·•]*(?:${JOIN_WORDS}\\s+|[@|&/]\\s*|[-–—]\\s*)?`;
+const UNREAD_BEFORE = [
+  new RegExp(`(?:${UNREAD_DATE_I})(?:${LEFT_JOIN_ANY}|T)$`, 'i'),
+  new RegExp(`(?:${UNREAD_DATE_CASED})${LEFT_JOIN_ANY}$`),
+];
+const UNREAD_AFTER = [
+  new RegExp(`^${LEFT_JOIN_ANY}(?:${UNREAD_DATE_I})`, 'i'),
+  new RegExp(`^${LEFT_JOIN_ANY}(?:${UNREAD_DATE_CASED})`),
+];
+const CONTEXT = 40;
+
+/*
+ * A zone written in words that the engine does not resolve. A zone-less time
+ * next to one is not given the site's default zone.
+ */
+const ZONE_WORD = '(?:Pacific|Mountain|Central|Eastern|Atlantic|Alaska|Alaskan|Hawaii|Hawaiian|Arizona|Newfoundland)';
+const PLACE_TIME = "(?:[A-Z][A-Za-z.'’-]*\\s+){1,3}[Tt]ime(?![A-Za-z])";
+const ZONE_WORDS_AFTER = [
+  new RegExp(`^\\s*\\(?\\s*${ZONE_WORD}(?![A-Za-z])`),
+  // "7 PM London time"; also "7 PM local time", which names the event's zone, not the site's.
+  new RegExp(`^\\s*,?\\s*(?:${PLACE_TIME}|local\\s+time(?![A-Za-z]))`),
+  new RegExp(`^\\s*\\(\\s*(?!(?:${WD}|${MON})(?![A-Za-z]))[A-Z][A-Za-z]`),
+];
+const ZONE_WORDS_BEFORE = [
+  // Not "<Word> time" before the time: "Start Time: 7 PM" is a label, not a zone.
+  new RegExp(`(?<![A-Za-z])(?:${ZONE_WORD}|${ZONE_PATTERN})\\s*[:,]?\\s*$`),
+  new RegExp(`\\(\\s*[A-Z][^()]*\\)\\s*[:,]?\\s*$`),
+];
+
+/** A second zone label after a slash ("8 PM ET/PT"): the time is given for several zones. */
+const SLASH_AFTER = /^\s?\/\s?[A-Za-z0-9]/;
+/** A sign and digits after a bare UTC/GMT that were not read as an offset ("UTC - 5"). */
+const LOOSE_OFFSET_AFTER = /^\s*[+\-−]\s*\d/;
 
 const LEFT_WINDOW = 80;
 const DAY_MS = 86_400_000;
@@ -88,18 +165,41 @@ function daysBetween(a: Fields, b: Fields): number {
   return Math.round((Date.UTC(b.year, b.month - 1, b.day) - Date.UTC(a.year, a.month - 1, a.day)) / DAY_MS);
 }
 
+function addDays(f: Fields, days: number): Fields & { weekday: number } {
+  const d = new Date(Date.UTC(f.year, f.month - 1, f.day + days));
+  return { ...f, year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), weekday: d.getUTCDay() };
+}
+
+const weekdayIndex = (text: string) => WEEKDAYS.findIndex((w) => w.startsWith(text.slice(0, 3)));
+const secondsOfDay = (f: Fields) => f.hour * 3600 + f.minute * 60 + f.second;
+
 interface Candidate {
   text: string;
   start: number;
   end: number;
+  /** Span of the time and its zone, without any date before or after it. */
+  timeStart: number;
+  timeEnd: number;
   parts: Part[];
   zoneToken: string | undefined;
   hasDate: boolean;
   hasWeekday: boolean;
+  /** The candidate must be left alone; so must every candidate it is linked to. */
+  drop: boolean;
+  /** How this candidate joins the one before it, when it is a later end of a range or item of a list. */
+  link?: 'range' | 'list';
 }
 
-/** Re-render the matched text for `epochMs` in the target zone, keeping its format. */
-function render(c: Candidate, epochMs: number, sourceDate: Fields, targetZone: string): { text: string; dayShift: number } {
+/**
+ * Re-render the matched text for `epochMs` in the target zone, keeping its format.
+ * `markerDate` is the source date a day marker is measured from, or null for no marker.
+ */
+function render(
+  c: Candidate,
+  epochMs: number,
+  markerDate: Fields | null,
+  targetZone: string,
+): { text: string; dayShift: number } {
   const target: ZoneRef = { kind: 'iana', id: targetZone };
   const t = fieldsAt(target, epochMs);
   const has = (type: PartType) => c.parts.some((p) => p.type === type);
@@ -124,7 +224,8 @@ function render(c: Candidate, epochMs: number, sourceDate: Fields, targetZone: s
       case 'hour': {
         const twelve = has('mer');
         const value = twelve ? t.hour % 12 || 12 : t.hour;
-        const padded = iso || (p.text.length === 2 && (p.text[0] === '0' || !twelve));
+        // Mirror the original: "01" and 24-hour "13" stay two digits, "1" stays one.
+        const padded = p.text.length === 2 && (p.text[0] === '0' || !twelve);
         const hour = padded ? pad2(value) : String(value);
         return !has('minute') && t.minute !== 0 ? `${hour}:${pad2(t.minute)}` : hour;
       }
@@ -141,6 +242,9 @@ function render(c: Candidate, epochMs: number, sourceDate: Fields, targetZone: s
       case 'zone':
         return shortZoneName(targetZone, epochMs);
       case 'isoz': {
+        // "10:00Z" without an ISO date: a numeric offset glued to the time
+        // ("02:00-08:00") would read as a range, so name the zone instead.
+        if (p.text === 'Z' && !iso) return ` ${shortZoneName(targetZone, epochMs)}`;
         const offset = offsetAt(target, epochMs);
         if (offset === 0 && p.text === 'Z') return 'Z';
         return formatOffset(offset, p.text === 'Z' || p.text.includes(':'));
@@ -159,8 +263,8 @@ function render(c: Candidate, epochMs: number, sourceDate: Fields, targetZone: s
   out += c.text.slice(pos, c.end);
 
   let dayShift = 0;
-  if (!c.hasDate && !c.hasWeekday) {
-    dayShift = daysBetween(sourceDate, t);
+  if (markerDate) {
+    dayShift = daysBetween(markerDate, t);
     if (dayShift !== 0) {
       const marker = ` (${dayShift > 0 ? '+' : '−'}${Math.abs(dayShift)} day${Math.abs(dayShift) === 1 ? '' : 's'})`;
       out += marker;
@@ -186,45 +290,54 @@ function sourceFields(c: Candidate, today: Fields & { weekday: number }): Fields
   let { year, month, day } = today;
   const monthName = get('mon');
   const dayText = get('day');
+  const wd = get('wd');
+  const valid = (y: number, m: number, d: number) => {
+    const check = new Date(Date.UTC(y, m - 1, d));
+    return m >= 1 && check.getUTCMonth() === m - 1 && check.getUTCDate() === d;
+  };
+  const weekdayOf = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+
   if (dayText) {
     day = parseInt(dayText, 10);
     month = monthName
       ? MONTHS.findIndex((m) => m.startsWith(monthName.slice(0, 3))) + 1
       : Number(get('monnum'));
-    year = Number(get('year') ?? today.year);
-    const check = new Date(Date.UTC(year, month - 1, day));
-    if (month < 1 || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null;
-  } else {
-    const wd = get('wd');
-    if (wd) {
-      // A weekday on its own: the next such day, counting today.
-      const wanted = WEEKDAYS.findIndex((w) => w.startsWith(wd.slice(0, 3)));
-      const ahead = (wanted - today.weekday + 7) % 7;
-      const d = new Date(Date.UTC(year, month - 1, day + ahead));
-      year = d.getUTCFullYear();
-      month = d.getUTCMonth() + 1;
-      day = d.getUTCDate();
+    const yearText = get('year');
+    if (yearText) {
+      year = Number(yearText);
+      if (!valid(year, month, day)) return null;
+      // A weekday that contradicts the date: one of them is wrong, and we cannot tell which.
+      if (wd && weekdayOf(year, month, day) !== weekdayIndex(wd)) return null;
+    } else if (wd) {
+      // "Sat, Jan 9" in November: the year, nearest to today, in which Jan 9 is a Saturday.
+      const found = [today.year, today.year + 1, today.year - 1].find(
+        (y) => valid(y, month, day) && weekdayOf(y, month, day) === weekdayIndex(wd),
+      );
+      if (found === undefined) return null;
+      year = found;
+    } else {
+      year = today.year;
+      if (!valid(year, month, day)) return null;
     }
+  } else if (wd) {
+    // A weekday on its own: the next such day, counting today.
+    const ahead = (weekdayIndex(wd) - today.weekday + 7) % 7;
+    ({ year, month, day } = addDays(today, ahead));
   }
   return { year, month, day, hour, minute, second };
 }
 
 function collectCandidates(text: string, allowZoneless: boolean): Candidate[] {
-  const anchors: RegExpExecArray[] = [];
+  const out: Candidate[] = [];
+  let prevEnd = 0;
   for (const m of text.matchAll(ANCHOR) as IterableIterator<RegExpExecArray>) {
     const g = m.groups!;
     if (!g.minute && !g.mer) continue;
     if (!g.zone && !g.isoz && !(allowZoneless && g.mer)) continue;
-    anchors.push(m);
-  }
-  const anchorStarts = new Set(anchors.map((m) => m.index));
-
-  const out: Candidate[] = [];
-  let prevEnd = 0;
-  for (const m of anchors) {
-    const g = m.groups!;
-    let start = m.index;
-    let end = start + m[0].length;
+    const timeStart = m.index;
+    const timeEnd = timeStart + m[0].length;
+    let start = timeStart;
+    let end = timeEnd;
     if (start < prevEnd) continue;
     const parts = partsOf(m, 0);
 
@@ -248,13 +361,14 @@ function collectCandidates(text: string, allowZoneless: boolean): Candidate[] {
       if (!isoDate || !(dateMatch!.groups!.isosep === 'T' || g.second)) continue;
     }
 
-    // Date after the time.
+    // Date after the time, unless another time follows it ("1 PM UTC – Fri 2 AM UTC").
     if (!dateMatch) {
       const rightText = text.slice(end, end + LEFT_WINDOW);
       const closing = g.zone && text[end] === ')' && m[0].includes('(') ? 1 : 0;
       for (const re of RIGHT_DATES) {
         const r = re.exec(rightText.slice(closing));
         if (r) {
+          if (TIME_NEXT.test(rightText.slice(closing + r[0].length))) break;
           dateMatch = r;
           parts.push(...partsOf(r, end + closing));
           end = end + closing + r[0].length;
@@ -262,11 +376,6 @@ function collectCandidates(text: string, allowZoneless: boolean): Candidate[] {
         }
       }
     }
-
-    // Ranges are not handled yet; converting one end alone would mislead.
-    if (RANGE_BEFORE.test(text.slice(Math.max(0, start - 24), start))) continue;
-    const after = RANGE_AFTER.exec(text.slice(end, end + 12));
-    if (after && !anchorStarts.has(end + after[0].length)) continue;
 
     parts.sort((a, b) => a.start - b.start);
     // Pull a closing parenthesis into the match so a day marker lands outside it.
@@ -276,86 +385,218 @@ function collectCandidates(text: string, allowZoneless: boolean): Candidate[] {
       text,
       start,
       end,
+      timeStart,
+      timeEnd,
       parts,
       zoneToken: g.zone ?? g.isoz,
       hasDate: parts.some((p) => p.type === 'day'),
       hasWeekday: parts.some((p) => p.type === 'wd'),
+      drop: false,
     });
     prevEnd = end;
   }
   return out;
 }
 
-/** Find every date/time in `text` that can be converted to the target zone. */
-export function findConversions(text: string, options: ConvertOptions = {}): Conversion[] {
-  const targetZone = options.targetZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const now = options.now ?? Date.now();
-  const defaultZone = options.defaultZone && isValidZone(options.defaultZone) ? options.defaultZone : undefined;
-  const target: ZoneRef = { kind: 'iana', id: targetZone };
-  const results: Conversion[] = [];
+/**
+ * Join candidates into ranges and lists, and mark those that must be left
+ * alone. A range or list is converted whole or not at all.
+ */
+function applyGuards(text: string, cands: Candidate[]): void {
+  for (let i = 1; i < cands.length; i++) {
+    const prev = cands[i - 1]!;
+    const c = cands[i]!;
+    const gap = text.slice(prev.end, c.start);
+    if (gap.length > GAP_MAX) continue;
+    if (GAP_RANGE.test(gap)) c.link = 'range';
+    else if (GAP_LIST.test(gap)) {
+      // "between 1 PM UTC and 3 PM UTC" is a range.
+      c.link = /\bbetween\s+$/i.test(text.slice(Math.max(0, prev.start - 10), prev.start)) ? 'range' : 'list';
+    }
+  }
 
-  for (const c of collectCandidates(text, defaultZone !== undefined)) {
-    const flags: Flag[] = [];
-    let primary: ZoneReading;
-    let region: string | undefined;
-    let otherMeanings: ZoneReading[] = [];
+  for (let i = 0; i < cands.length; i++) {
+    const c = cands[i]!;
+    const prev = cands[i - 1];
+    const next = cands[i + 1];
+    const nextLinked = next?.link !== undefined;
+    const before = text.slice(Math.max(prev?.end ?? 0, c.start - CONTEXT), c.start);
+    const after = text.slice(c.end, Math.min(c.end + CONTEXT, next?.start ?? Infinity));
+    const afterTime = text.slice(c.timeEnd, Math.min(c.timeEnd + CONTEXT, next?.start ?? Infinity));
+    const beforeTime = text.slice(Math.max(prev?.end ?? 0, c.timeStart - CONTEXT), c.timeStart);
+    const drop = () => (c.drop = true);
 
-    if (c.zoneToken) {
-      const resolved = resolveZone(c.zoneToken);
-      if (!resolved) continue;
-      ({ primary, region } = resolved);
-      otherMeanings = resolved.alternatives;
-    } else {
-      primary = { ref: { kind: 'iana', id: defaultZone! }, description: `${defaultZone} (site default)` };
-      flags.push('assumed-zone');
+    // Ranges and lists: every end needs its own zone ("7 PM–9 PM" under a
+    // site default, "1:30 or 3:00 PM UTC" are left alone).
+    if (c.link) {
+      if (!c.zoneToken || !prev!.zoneToken) drop();
+    } else if (RANGE_BEFORE.test(text.slice(Math.max(prev?.end ?? 0, c.start - 24), c.start))) drop();
+    if (!nextLinked && RANGE_AFTER.test(after)) drop();
+
+    // "8 PM ET/PT": the time is given for several zones.
+    if (c.zoneToken && !nextLinked && SLASH_AFTER.test(afterTime)) drop();
+
+    // "14:00 UTC - 5": an offset we did not read. Never convert without it.
+    if (c.zoneToken && /^(?:UTC|GMT)$/.test(c.zoneToken) && !nextLinked && LOOSE_OFFSET_AFTER.test(afterTime)) drop();
+
+    // A zone-less time next to a zone written in words is not given the site default.
+    if (!c.zoneToken) {
+      if (ZONE_WORDS_AFTER.some((re) => re.test(afterTime))) drop();
+      if (ZONE_WORDS_BEFORE.some((re) => re.test(beforeTime))) drop();
     }
 
-    const read = (reading: ZoneReading) => {
-      const fields = sourceFields(c, fieldsAt(reading.ref, now));
-      return fields ? { reading, fields, epochMs: toEpoch(reading.ref, fields) } : null;
-    };
+    // A date or day name we do not read, directly next to the time ("07/04/2026
+    // 6:00 PM UTC", "Mon–Fri 1 AM UTC", "1 AM UTC, Mon–Fri").
+    if (UNREAD_BEFORE.some((re) => re.test(before)) || UNREAD_AFTER.some((re) => re.test(after))) drop();
+  }
 
-    let chosen = read(primary);
-    if (!chosen) continue;
-    const others: NonNullable<ReturnType<typeof read>>[] = [];
+  // A range or list is converted whole or not at all.
+  for (let i = 0; i < cands.length; ) {
+    let j = i + 1;
+    while (j < cands.length && cands[j]!.link) j++;
+    if (cands.slice(i, j).some((c) => c.drop)) for (let k = i; k < j; k++) cands[k]!.drop = true;
+    i = j;
+  }
+}
 
-    // "EST" on a date its region observes EDT: offer both readings.
-    if (region && primary.ref.kind === 'fixed' && offsetAt({ kind: 'iana', id: region }, chosen.epochMs) !== primary.ref.offsetMinutes) {
-      const regional = read({ ref: { kind: 'iana', id: region }, description: `local time in ${region}` });
-      if (regional && regional.epochMs !== chosen.epochMs) {
-        flags.push('season-mismatch');
-        if ((options.seasonMismatch ?? 'regional') === 'regional') {
-          others.push({ ...chosen, reading: { ...primary, description: `${primary.description}, taken literally` } });
-          chosen = regional;
-        } else {
-          others.push(regional);
-        }
+interface Context {
+  targetZone: string;
+  target: ZoneRef;
+  now: number;
+  defaultZone: string | undefined;
+  seasonMismatch: 'regional' | 'literal';
+}
+
+/** What a later end of a range or list needs from the end before it. */
+interface Previous {
+  epochMs: number;
+  /** Source wall-clock fields the previous end was read as. */
+  fields: Fields;
+  zoneToken: string | undefined;
+  /** The text of the group's first end carried a date or weekday. */
+  dated: boolean;
+  /** The text of the group's first end carried a date. */
+  hasDate: boolean;
+  /** Source date day markers are measured from, or null when the group is dated. */
+  markerDate: Fields | null;
+}
+
+type Reading = { reading: ZoneReading; fields: Fields; epochMs: number };
+
+/**
+ * Convert one candidate. Returns null when it cannot be read with confidence;
+ * otherwise the conversion (absent when the text is already in the reader's
+ * zone) and what a following end of the same range or list needs.
+ */
+function convertOne(
+  c: Candidate,
+  ctx: Context,
+  prev: Previous | undefined,
+): { conversion?: Conversion; state: Previous } | null {
+  const flags: Flag[] = [];
+  let primary: ZoneReading;
+  let region: string | undefined;
+  let otherMeanings: ZoneReading[] = [];
+
+  if (c.zoneToken) {
+    const resolved = resolveZone(c.zoneToken);
+    if (!resolved) return null;
+    ({ primary, region } = resolved);
+    otherMeanings = resolved.alternatives;
+  } else {
+    primary = { ref: { kind: 'iana', id: ctx.defaultZone! }, description: `${ctx.defaultZone} (site default)` };
+    flags.push('assumed-zone');
+  }
+
+  const ownDate = c.hasDate || c.hasWeekday;
+  // "1:30 PM UTC – 3:00 PM UTC on Friday": the first end has no date of its own.
+  if (prev && ownDate && !prev.dated) return null;
+  // A later end without a date takes the date of the end before it.
+  const inherit = prev !== undefined && !ownDate;
+  let dayOffset = 0;
+
+  // Same label: the date as written for the end before. Another label: the
+  // date the end before falls on in this end's zone.
+  const sameLabel = inherit && c.zoneToken !== undefined && c.zoneToken === prev.zoneToken;
+  const read = (reading: ZoneReading): Reading | null => {
+    const base = !inherit ? null : sameLabel ? prev.fields : fieldsAt(reading.ref, prev.epochMs);
+    const today = base ? addDays(base, dayOffset) : fieldsAt(reading.ref, ctx.now);
+    const fields = sourceFields(c, today);
+    return fields ? { reading, fields, epochMs: toEpoch(reading.ref, fields) } : null;
+  };
+
+  // The end of a range is the first such time after its start ("11:30 PM – 1:30 AM UTC").
+  if (inherit && c.link === 'range') {
+    const first = read(primary);
+    if (!first) return null;
+    if (sameLabel) {
+      const wall = secondsOfDay(first.fields);
+      if (wall === secondsOfDay(prev.fields)) return null;
+      if (wall < secondsOfDay(prev.fields)) dayOffset = 1;
+    } else if (first.epochMs <= prev.epochMs) dayOffset = 1;
+  }
+
+  let chosen = read(primary);
+  if (!chosen) return null;
+  const others: Reading[] = [];
+
+  // "EST" on a date its region observes EDT: offer both readings.
+  if (region && primary.ref.kind === 'fixed' && offsetAt({ kind: 'iana', id: region }, chosen.epochMs) !== primary.ref.offsetMinutes) {
+    const regional = read({ ref: { kind: 'iana', id: region }, description: `local time in ${region}` });
+    if (regional && regional.epochMs !== chosen.epochMs) {
+      flags.push('season-mismatch');
+      if (ctx.seasonMismatch === 'regional') {
+        others.push({ ...chosen, reading: { ...primary, description: `${primary.description}, taken literally` } });
+        chosen = regional;
+      } else {
+        others.push(regional);
       }
     }
+  }
 
-    for (const meaning of otherMeanings) {
-      const alt = read(meaning);
-      if (alt && alt.epochMs !== chosen.epochMs) {
-        if (!flags.includes('ambiguous-zone')) flags.push('ambiguous-zone');
-        others.push(alt);
-      }
+  for (const meaning of otherMeanings) {
+    const alt = read(meaning);
+    if (alt && alt.epochMs !== chosen.epochMs) {
+      if (!flags.includes('ambiguous-zone')) flags.push('ambiguous-zone');
+      others.push(alt);
     }
+  }
 
-    // Already in the reader's zone: nothing to convert.
-    if (offsetAt(chosen.reading.ref, chosen.epochMs) === offsetAt(target, chosen.epochMs)) continue;
+  // A range must run forwards, and an end that took its start's date must fall within a day of it.
+  if (prev && c.link === 'range') {
+    if (chosen.epochMs <= prev.epochMs) return null;
+    if (inherit && chosen.epochMs - prev.epochMs >= DAY_MS) return null;
+  }
 
-    if (!c.hasDate) flags.push('time-only');
-    const rendered = render(c, chosen.epochMs, chosen.fields, targetZone);
-    const alternatives: Alternative[] = others.map((o) => ({
-      description: o.reading.description,
-      epochMs: o.epochMs,
-      converted: render(c, o.epochMs, o.fields, targetZone).text,
-    }));
+  const state: Previous = inherit
+    ? { ...prev, epochMs: chosen.epochMs, fields: chosen.fields, zoneToken: c.zoneToken }
+    : {
+        epochMs: chosen.epochMs,
+        fields: chosen.fields,
+        zoneToken: c.zoneToken,
+        dated: ownDate,
+        hasDate: c.hasDate,
+        markerDate: ownDate ? null : chosen.fields,
+      };
 
-    results.push({
+  // Already in the reader's zone: nothing to convert.
+  if (offsetAt(chosen.reading.ref, chosen.epochMs) === offsetAt(ctx.target, chosen.epochMs)) return { state };
+
+  if (!state.hasDate) flags.push('time-only');
+  const markerFor = (r: Reading) => (state.markerDate === null ? null : inherit ? state.markerDate : r.fields);
+  const rendered = render(c, chosen.epochMs, markerFor(chosen), ctx.targetZone);
+  const alternatives: Alternative[] = others.map((o) => ({
+    description: o.reading.description,
+    epochMs: o.epochMs,
+    converted: render(c, o.epochMs, markerFor(o), ctx.targetZone).text,
+  }));
+
+  return {
+    state,
+    conversion: {
       index: c.start,
       length: c.end - c.start,
-      original: text.slice(c.start, c.end),
+      original: c.text.slice(c.start, c.end),
       converted: rendered.text,
       epochMs: chosen.epochMs,
       sourceDescription: chosen.reading.description,
@@ -364,7 +605,50 @@ export function findConversions(text: string, options: ConvertOptions = {}): Con
       alternatives,
       format: c.parts.some((p) => p.type === 'monnum') ? 'iso' : 'text',
       dayShift: rendered.dayShift,
-    });
+    },
+  };
+}
+
+/**
+ * Find every date/time in `text` that can be converted to the target zone.
+ * Returns no conversions when `targetZone` is not a valid IANA zone.
+ */
+export function findConversions(text: string, options: ConvertOptions = {}): Conversion[] {
+  const targetZone = options.targetZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!isValidZone(targetZone)) return [];
+  const ctx: Context = {
+    targetZone,
+    target: { kind: 'iana', id: targetZone },
+    now: options.now ?? Date.now(),
+    defaultZone: options.defaultZone && isValidZone(options.defaultZone) ? options.defaultZone : undefined,
+    seasonMismatch: options.seasonMismatch ?? 'regional',
+  };
+
+  const cands = collectCandidates(text, ctx.defaultZone !== undefined);
+  applyGuards(text, cands);
+
+  const results: Conversion[] = [];
+  for (let i = 0; i < cands.length; ) {
+    let j = i + 1;
+    while (j < cands.length && cands[j]!.link) j++;
+    const group = cands.slice(i, j);
+    i = j;
+    if (group[0]!.drop) continue;
+
+    // Every end must be readable, or none is converted.
+    const converted: Conversion[] = [];
+    let prev: Previous | undefined;
+    let ok = true;
+    for (const c of group) {
+      const r = convertOne(c, ctx, prev);
+      if (!r) {
+        ok = false;
+        break;
+      }
+      if (r.conversion) converted.push(r.conversion);
+      prev = r.state;
+    }
+    if (ok) results.push(...converted);
   }
   return results;
 }

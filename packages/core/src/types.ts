@@ -38,12 +38,22 @@ export interface Conversion {
   alternatives: Alternative[];
   /** 'iso' for machine-style timestamps (2026-11-13T01:30:00Z), 'text' for prose. */
   format: 'iso' | 'text';
-  /** For time-only text: target date minus source date, in days (-1, 0 or 1). */
+  /**
+   * For time-only text: target date minus source date, in days. Usually -1, 0
+   * or 1; zones more than 24 hours apart (Pacific/Kiritimati and
+   * Pacific/Pago_Pago are 25) can give -2 or 2. Always 0 when the text has a date or
+   * weekday. For the later end of a time-only range or list, measured from the
+   * source date of the first end.
+   */
   dayShift: number;
 }
 
 export interface ConvertOptions {
-  /** IANA zone to convert into. Defaults to the system zone. */
+  /**
+   * IANA zone to convert into. Defaults to the system zone. If it is not a
+   * valid zone, nothing is converted: findConversions returns [] and
+   * convertText returns the text unchanged. Neither throws.
+   */
   targetZone?: string;
   /** Reference instant for text without a full date. Defaults to Date.now(). */
   now?: number;
