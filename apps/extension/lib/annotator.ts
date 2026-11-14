@@ -123,6 +123,10 @@ interface Plan {
   context: [before: string, after: string];
 }
 
+const DAY = 86_400_000;
+/** "5:30 PM PST (−1 day)" → "5:30 PM PST". */
+const withoutDayShift = (converted: string) => converted.replace(/\s*\([+\u2212-]\d+ days?\)$/u, '');
+
 const readingsOf = (conversions: Conversion[]) =>
   conversions.map((c) => `${c.index}:${c.length}:${c.epochMs}`).join(',');
 
@@ -238,8 +242,8 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
    * A match is kept only if reading it together with the text on either side
    * gives the same match: "10:00 AM UTC" followed by a text node "+2" is left
    * alone, as is a match touching neighbouring text that could continue it
-   * (letters, digits, + - : /). Text before it may only extend the match
-   * leftwards ("Nov 13 at" + "1:30 AM UTC").
+   * (letters, digits, + - : /). Text before it may only add a date or weekday
+   * that leaves the local time unchanged ("Friday at" + "1:30 AM UTC").
    */
   function find(text: string, [before, after]: [string, string]): Conversion[] {
     const found = findConversions(text, options);
@@ -247,12 +251,18 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
     const whole = findConversions(before + text + after, options);
     const b = before.length;
     return found.filter((c) => {
-      const end = c.index + c.length;
+      const start = c.index + b;
+      const end = start + c.length;
       if (c.index === 0 && GLUED_BEFORE.test(before)) return false;
-      if (end === text.length && GLUED_AFTER.test(after)) return false;
-      return whole.some(
-        (w) => w.index <= c.index + b && w.index + w.length === end + b && (w.index < c.index + b || w.epochMs === c.epochMs),
-      );
+      if (c.index + c.length === text.length && GLUED_AFTER.test(after)) return false;
+      return whole.some((w) => {
+        if (w.index + w.length !== end || w.index > start) return false;
+        if (w.index === start) return w.epochMs === c.epochMs;
+        // Extended leftwards: only a date or weekday, read as the same clock
+        // time on another day and shown as the same local time. A range or
+        // list start, or a daylight-saving change between the days, fails.
+        return (w.epochMs - c.epochMs) % DAY === 0 && w.converted.endsWith(withoutDayShift(c.converted));
+      });
     });
   }
 

@@ -159,8 +159,14 @@ describe('text-node boundaries', () => {
   });
 
   it('still converts a time followed by ordinary text in the next text node', () => {
+    const p = split('Call at 10:00 AM UTC', ' sharp.');
+    expect(p.textContent).toBe('Call at 2:00 AM PST sharp.');
+  });
+
+  it('follows the engine when the next text node makes the time unreadable', () => {
+    // The engine leaves "10:00 AM UTC tomorrow" alone (an unread relative date).
     const p = split('Call at 10:00 AM UTC', ' tomorrow');
-    expect(p.textContent).toBe('Call at 2:00 AM PST tomorrow');
+    expect(p.textContent).toBe('Call at 10:00 AM UTC tomorrow');
   });
 
   it('still converts a time whose date sits in the previous element', () => {
@@ -168,6 +174,17 @@ describe('text-node boundaries', () => {
     annotator = createAnnotator(document, OPTIONS);
     stop = annotator.start();
     expect(shown()).toEqual(['converted: 5:30 PM PST (−1 day)']);
+  });
+
+  it('still converts a time whose date sits in the previous text node', () => {
+    const p = split('Nov 13 at ', '1:30 AM UTC');
+    expect(p.textContent).toBe('Nov 13 at 5:30 PM PST (−1 day)');
+  });
+
+  it('leaves a time alone when the date before it falls in a different daylight-saving period', () => {
+    // Read with today's date this is 5:30 AM PST; on July 1 it is 6:30 AM PDT.
+    const p = split('Jul 1, 2026 at ', '1:30 PM UTC');
+    expect(p.textContent).toBe('Jul 1, 2026 at 1:30 PM UTC');
   });
 
   it('undoes a conversion when text added next to it changes the reading', async () => {

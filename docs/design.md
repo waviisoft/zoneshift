@@ -198,8 +198,10 @@
 - A match touching the edge of its text node is left alone when the
   neighbouring text continues it without a space (letters, digits, `+`, `-`,
   `−`, dashes, `:`, `/`).
-- Text before a match may only extend it leftwards: "Friday at" + "1:30 AM
-  UTC" still converts the time.
+- Text before a match may only add a date or weekday that leaves the local
+  time unchanged: "Friday at" + "1:30 AM UTC" still converts the time, but
+  "Jul 1, 2026 at" + "1:30 PM UTC" read in November is left alone, because the
+  daylight-saving offset differs between the two days.
 - When text is added next to a converted time and changes how it reads, the
   conversion is undone.
 
