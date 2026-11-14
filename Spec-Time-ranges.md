@@ -4,23 +4,25 @@
 
 Ranges such as `1:30–3:00 PM UTC`, `1-3 PM UTC`, `9:00 AM UTC to 5:00 PM` and `Nov 12 11 PM – Nov 13 1 AM UTC` convert as one unit with one icon. Both ends move together, and the result never reads as a backwards range. Anything that only looks like a range, or where either end is uncertain, stays as written.
 
+What #26 already does: a range or list converts only when every end carries its own zone (`1:30 PM UTC – 3:00 PM UTC`), end by end with one icon per end, and whole or not at all; everything else is left alone whole. This spec's remaining scope is **shared-zone ranges**, where the zone or meridiem is written once, and whether zoned ranges with one label become one unit too (decision 3).
+
 ## Decisions for the owner
 
-1. **v1 scope.** Options: the narrow set below, or include the deferred shapes too. **Recommended: narrow.** It covers every example in #11 with the fewest patterns. Deferred shapes are left alone whole (L1) and go to a follow-up issue.
+1. **v1 scope.** Options: the narrow set below, or include the deferred shapes too. **Recommended: narrow.** It covers every example in #11 with the fewest patterns. Deferred shapes are left alone whole (L1) and go to a follow-up issue. The table applies to shared-zone ranges; when each end has its own zone, #26 already accepts `through`, `thru`, `till`, `til`, `~` and `between X and Y`.
 
    | In v1 | Deferred (left alone) |
    |---|---|
    | Separators `-` `–` `—` (any spaces or none); `to`, `until` | `through`, `thru`, `till`, `til`; `between X and Y` |
-   | 12-hour, meridiem on the end or both ends; 24-hour with minutes on both | `noon`, `midnight`; mixed 12/24-hour |
-   | Zone after the end; same label on both ends; zone on the first end only (decision 2) | Different labels as one unit (decision 3); lists (decision 4) |
+   | 12-hour, meridiem on the end or both ends; 24-hour with minutes on both | `noon`, `midnight` (left alone in #26 too); mixed 12/24-hour |
+   | Zone after the end; same label on both ends (decision 3); zone on the first end only (decision 2) | Different labels as one unit (decision 3); lists sharing a zone (decision 4) |
    | Date or weekday before the start, or before each end | Date after the range or before the end only; ISO timestamps |
 
 2. **Zone on the first end only** (`9:00 AM UTC to 5:00 PM`). Options: v1 with the L8 guard, or defer. **Recommended: v1 with the guard.** It is one of the issue's three examples.
-3. **Zone on each end.** Options: (a) same label → one unit; different labels → two conversions as today, both left alone if they would read backwards; (b) always one unit; (c) always two. **Recommended: (a).** One unit fixes today's wrong `(−1 day)` on `11 PM UTC – 1 AM UTC`. Different labels are rare and often an equivalence (`1 PM UTC to 5 AM PST`).
-4. **Lists sharing a trailing zone** (`9 AM, 1 PM and 5 PM UTC`). Today only the last item converts: "9 AM, 1 PM and 9 AM PST". Options: leave the whole list alone, keep today's behaviour, or convert every item (new issue). **Recommended: leave alone.** A half-converted list is a wrong conversion.
-5. **Overnight inference** (end earlier on the clock, no dates). Options: next day if the range is then ≤ 12 h, always, or never. **Recommended: ≤ 12 h.** This keeps `10 PM – 2 AM` and night shifts, and rejects `3 PM to 1 PM UTC` (usually "moved from").
-6. **Day marker on time-only ranges.** Options: (a) one marker for the start's day, after the whole range, or after the start when the converted range crosses midnight; (b) one per end; (c) always after the whole range. **Recommended: (a).** It can't be read as applying to the end alone.
-7. **Icons.** Options: one per range, or one per end. **Recommended: one.** Half a range can then never show converted.
+3. **Zone on each end.** Partly built in #26: every end with its own zone converts end by end, one icon each; with different labels the end must fall after the start on the written date, else the whole range is left alone; `11 PM UTC – 1 AM UTC` already gives `3 PM PST – 5 PM PST` (the first draft's wrong `(−1 day)` is gone). **Still open:** should an already-built range whose ends carry the **same** label become one unit with one icon (B1, B6–B8, B10)? Options: (a) yes, same label → one unit; different labels stay per end as built; (b) keep #26's per-end conversion, so only shared-zone ranges are one unit; (c) one unit for different labels too. **Recommended: (a).** Half a range can then never show converted, the reader gets one day marker (decision 6) and one model whichever way the zone is written. Different labels are rare and often an equivalence (`1 PM UTC to 5 AM PST`, left alone in #26). Cost: zoned outputs change (see Acceptance tests); for example `Jan 1, 2027 7 AM UTC – 9 AM UTC` shows `Dec 31, 2026 11 PM PST – 1 AM PST (+1 day)` today, and B6 would write the end's date instead.
+4. **Lists sharing a trailing zone** (`9 AM, 1 PM and 5 PM UTC`). **Already built in #26:** the whole list is left alone; lists where every item has its own zone convert item by item.
+5. **Overnight inference** (end earlier on the clock, no dates). Options: next day if the range is then ≤ 12 h, always, or never. **Recommended: ≤ 12 h.** This keeps `10 PM – 2 AM` and night shifts, and rejects `3 PM to 1 PM UTC` (usually "moved from"). Note: #26 lets a zoned range run up to 24 h, so `3 PM UTC to 1 PM UTC` converts today as `7 AM PST to 5 AM PST (+1 day)`; under decision 3 (a) same-label zoned ranges would take this cap.
+6. **Day marker on time-only ranges.** Options: (a) one marker for the start's day, after the whole range, or after the start when the converted range crosses midnight; (b) one per end; (c) always after the whole range. **Recommended: (a).** It can't be read as applying to the end alone. #26 does (b) for zoned ranges: `1:30 AM UTC – 3:00 AM UTC` → `5:30 PM PST (−1 day) – 7:00 PM PST (−1 day)`.
+7. **Icons.** Options: one per range, or one per end. **Recommended: one.** Half a range can then never show converted. Today zoned ranges have one icon per end, and **Show original here** switches one end only; decision 3 (a) brings them to one.
 
 No new permissions or network access.
 
@@ -44,9 +46,9 @@ No new permissions or network access.
 
 **B7** A time-only range has at most one day marker. It gives the start's day, worded as for single times. It goes after the whole range, or directly after the start when the converted range crosses midnight. Ranges with a date or weekday get no marker.
 
-**B8** The zone label is read once for the range. Confidence, flags and alternatives cover both ends, and each alternative is a whole-range rendering, so one tap switches both. If the ends get different season-mismatch verdicts, the range is left alone. A range is "already local" only if both ends are.
+**B8** The zone label is read once for the range. Confidence, flags and alternatives cover both ends, and each alternative is a whole-range rendering, so one tap switches both. If the ends get different season-mismatch verdicts, the range is left alone. A range is "already local" only if both ends are. (Today each end of a zoned range carries its own alternatives; see [Alternative readings](Spec:-Alternative-readings) B7.)
 
-**B9** `UTC`/`GMT` followed directly by `-` or `–` and a time with its own meridiem or zone is a separator, not an offset (`1:30 PM UTC-3:00 PM UTC`). Today this is misread as UTC−3.
+**B9** Already built in #26 (`1:30 PM UTC-3:00 PM UTC` → `5:30 AM PST-7:00 AM PST`; `+` and `−` are never a dash). Still left alone, and in scope here: a 24-hour end whose hour is past 12, `13:00 UTC-14:00 UTC`.
 
 **B10** One icon goes after the range. The popover shows the whole original, the whole local range and how it was read. **Show original here** and the page-wide switches act on the whole range. In `code`/`pre`/`samp`/`kbd`, the range gets a hollow icon and converts only on request.
 
@@ -61,7 +63,7 @@ Examples use reader zone America/Los_Angeles and now = Wed 2026-11-11 20:00 UTC,
 | `10–11 PM UTC` | `2–3 PM PST` | B4 |
 | `13:00–15:30 UTC` | `05:00–07:30 PST` | B6 |
 | `10 PM – 2 AM UTC` | `2 PM – 6 PM PST` | B5 |
-| `11 PM UTC – 1 AM UTC` | `3 PM PST – 5 PM PST` (today: `5 PM PST (−1 day)` on the end) | B5, decision 3 |
+| `11 PM UTC – 1 AM UTC` | `3 PM PST – 5 PM PST`, one icon (today the same text, two icons) | B5, decision 3 |
 | `1:30–3:00 AM UTC` | `5:30–7:00 PM PST (−1 day)` | B7 |
 | `6 AM – 9 AM UTC` | `10 PM (−1 day) – 1 AM PST` | B7 |
 | `12:30–3:00 PM UTC` (reader Asia/Tokyo) | `9:30 PM–12:00 AM GMT+9` | B6, B7 |
@@ -70,8 +72,10 @@ Examples use reader zone America/Los_Angeles and now = Wed 2026-11-11 20:00 UTC,
 | `Nov 12, 7–9 AM UTC` | `Nov 11, 11 PM–Nov 12, 1 AM PST` | B6 |
 | `Friday 7–9 AM UTC` | `Thursday 11 PM–Friday 1 AM PST` | B6 |
 | `Nov 12 11 PM – Nov 13 1 AM UTC` | `Nov 12 3 PM – Nov 12 5 PM PST` | B5, B6 |
-| `1:30 PM UTC-3:00 PM UTC` | `5:30 AM PST-7:00 AM PST` (today: `8:30 AM PST`, read as UTC−3) | B9 |
+| `1:30 PM UTC-3:00 PM UTC` | `5:30 AM PST-7:00 AM PST`, one icon (today the same text, two icons) | B9 |
 | `Open 9 AM – 5 PM` (site default America/New_York) | `Open 6 AM – 2 PM PST`, flagged assumed zone | B3, B6 |
+
+Today (#26, commit 84d9d93) every row except the two marked is left alone whole.
 
 ## Left alone
 
@@ -79,19 +83,19 @@ Nothing here converts or gets an icon unless the row says so. Reader and now as 
 
 | # | Case | Examples (all unchanged) |
 |---|---|---|
-| L1 | **Range-like phrases outside v1.** One end is never converted alone; the whole phrase stays as written, with any amount of whitespace. Today several of these convert the end only. | `noon–3 PM UTC`, `9 AM till 5 PM UTC`, `9 AM through 5 PM UTC`, `between 1 and 3 PM UTC`, `1 PM UTC – 3`, `3 PM UTC - 4 people` |
+| L1 | **Range-like phrases outside v1.** One end is never converted alone; the whole phrase stays as written, with any amount of whitespace. Today all of these are left alone, but #26 converts the end alone when a label sits between `noon`/`midnight` and the dash: `noon UTC – 3 PM UTC` → `noon UTC – 7 AM PST`, `midnight UTC – 2 AM UTC` → `midnight UTC – 6 PM PST (−1 day)`. This spec fixes that. | `noon–3 PM UTC`, `noon UTC – 3 PM UTC`, `9 AM till 5 PM UTC`, `9 AM through 5 PM UTC`, `between 1 and 3 PM UTC`, `1 PM UTC – 3`, `3 PM UTC - 4 people` |
 | L2 | **Numbers that are not times:** no meridiem and no minutes, so neither end is a time, even with a zone nearby | `pages 1-3`, `ages 9–5`, `won 3-1`, `1-3 hours`, `30–45 min`, `9 to 5`, `9–5 UTC`, `13–15 UTC`, `v2.1–2.3`, `555-0134`, `1-800-555-0199` |
 | L3 | **Meridiem letters followed by a digit** are not a meridiem, even with a site default zone | `5-7 PM2.5`, `AM1–AM3 slots` |
 | L4 | **Mismatched clocks:** mixed 12/24-hour, or a meridiem on the start only | `9 AM–17:00 UTC`, `9 AM–5 UTC` |
-| L5 | **Date-only ranges.** A single time after a date range is not a time range and behaves as today (time-only, with the date range text untouched). | `Nov 12–14`, `12–14 November 2026`, `Nov 12 – Dec 3`; `Nov 12–14, 1 AM UTC` → `Nov 12–14, 5 PM PST (−1 day)` as today |
-| L6 | **Lists sharing one zone** (decision 4): times joined by `,` `and` `or` `&` `/` where only the last carries the zone. This changes today's behaviour. Lists where every item has its own zone still convert item by item. | `9 AM, 1 PM and 5 PM UTC`, `1 PM or 3 PM UTC`, `between 1 PM and 3 PM UTC`, `9–10 AM, 1 PM UTC`; but `1 PM UTC, 3 PM UTC` → `5 AM PST, 7 AM PST` |
-| L7 | **Different stated zones on the two ends** (decision 3) stay two separate conversions, as today. They are both left alone if the end's instant would come before the start's. | Reader UTC: `9 AM PT – 12 PM ET` → `5 PM UTC – 5 PM UTC`, two icons (an equivalence, not a range); `11 PM ET – 1 AM PT` left alone |
+| L5 | **Date-only ranges.** A time after a date range is left alone, as in #26 (a date the engine does not read sits next to it). | `Nov 12–14`, `12–14 November 2026`, `Nov 12 – Dec 3`, `Nov 12–14, 1 AM UTC` |
+| L6 | Already built in #26: lists sharing one zone are left alone; lists where every item has its own zone convert item by item. | `9 AM, 1 PM and 5 PM UTC`, `1 PM or 3 PM UTC`, `between 1 PM and 3 PM UTC`, `9–10 AM, 1 PM UTC`; but `1 PM UTC, 3 PM UTC` → `5 AM PST, 7 AM PST` |
+| L7 | Already built in #26: different stated zones stay separate conversions, and the whole range is left alone unless the end falls after the start on the written date. | Reader UTC: `Nov 13, 2026 1 PM ET – 3 PM PT` → `Nov 13, 2026 6 PM UTC – 11 PM UTC`, two icons; `9 AM PT – 12 PM ET` (same instant) and `11 PM ET – 1 AM PT` left alone |
 | L8 | **Zone on the first end, with a label of its own on the end:** a word such as `local`, `your time` or `local time`, or 2–5 capital letters that aren't a known zone | `9:00 AM UTC to 5:00 PM local`, `9 AM UTC – 5 PM BRT`, `9 AM UTC – 5 PM EOD` |
 | L9 | **ISO timestamps** never join a range. Each stays an individual ISO timestamp (hollow icon) as today, and an ISO date before a range is deferred. | `2026-11-13T01:30Z–2026-11-13T03:00Z` (two hollow icons), `2026-11-13T01:30Z/2026-11-13T03:00Z` (two), `2026-11-13 01:30–03:00 UTC` (left alone) |
 | L10 | **Implausible ranges:** zero length; an inferred overnight of more than 12 hours (decision 5); explicit dates running backwards | `3 PM – 3 PM UTC`, `3 PM to 1 PM UTC`, `6 PM – 7 AM UTC`, `9:00–5:00 UTC` (read as 24-hour: 20 h), `Nov 13 1 AM – Nov 12 11 PM UTC` |
 | L11 | **Either end invalid** | `Feb 30, 1–3 PM UTC`, `11:30–13:00 PM UTC`, `10:00–25:00 UTC` |
 | L12 | **Already in the reader's zone** at both ends | `1–3 PM PST`, `9 AM PT – 5 PM PT` |
-| L13 | **Range split across elements:** a time at the edge of a text node, joined by a separator to a time or number in the adjacent inline text, is not converted alone. Today the end converts. | `<b>9 AM</b> – 5 PM UTC`, `<span>1</span>-3 PM UTC` |
+| L13 | Already built in #26 (text-node boundary rule): a time at the edge of a text node that a neighbouring inline node makes part of a range is left alone. | `<b>9 AM</b> – 5 PM UTC`, `<span>1</span>-3 PM UTC`, `From 1:30` + `–3:00 PM UTC` |
 | L14 | **Code and log blocks** (not converted automatically): the range is recognised and gets a hollow icon, but stays as written until the reader asks | `<code>2-3 PM UTC</code>`, `<pre>13:00–14:00 UTC</pre>` |
 | L15 | **Dotted times** are not supported yet | `1.30–3.00 pm UTC` |
 
@@ -101,7 +105,7 @@ Nothing here converts or gets an icon unless the row says so. Reader and now as 
 |---|---|---|
 | Daylight saving changes in the source zone inside the range | `Nov 1, 2026 12:30–3:00 AM ET` (UTC) | `Nov 1, 2026 4:30–8:00 AM UTC`. Each end uses its own offset, so the range is 3 h 30 m. |
 | Daylight saving changes in the target zone inside the range | `Nov 1, 2026 8:00–10:00 AM UTC` | `Nov 1, 2026 1:00 AM PDT–2:00 AM PST` (B6) |
-| Season-mismatch verdicts differ between the ends | `Nov 1, 2026 12:30–3:00 AM EST` | Left alone (B8) |
+| Season-mismatch verdicts differ between the ends | `Nov 1, 2026 12:30–3:00 AM EST` | Left alone (B8). The zoned form `Nov 1, 2026 12:30 AM EST – 3:00 AM EST` converts today, end by end: `Nov 1, 2026 4:30 AM UTC – 8:00 AM UTC`, first end orange, second blue. Under decision 3 (a) it is left alone. |
 | An end in a skipped or repeated local hour | `Nov 1, 2026 1:30–2:30 AM ET` | Each end is read exactly as a single time would be |
 | Half-hour zone | `1–3 PM UTC` (Asia/Kolkata) | `6:30–8:30 PM GMT+5:30` |
 | Ends at midnight | `10 PM – 12 AM UTC` | `2 PM – 4 PM PST`; in Tokyo, `7 AM – 9 AM GMT+9 (+1 day)` |
@@ -116,32 +120,37 @@ Nothing here converts or gets an icon unless the row says so. Reader and now as 
 ## Non-goals
 
 - Deferred shapes from decision 1: a follow-up issue, to be filed when this spec is approved.
-- Converting lists as a unit (a new issue, if decision 4 is accepted).
+- Converting lists that share a zone (a new issue; decision 4 is built as "leave alone").
 - Recognising ranges split across elements: goes with split timestamps (roadmap item 3).
-- Popover UI for alternative readings (roadmap item 3). This spec only fixes what the alternatives contain.
+- Popover UI for alternative readings: [Alternative readings](Spec:-Alternative-readings) (#17). This spec only fixes what the alternatives contain.
 
 ## Acceptance tests
 
 Engine unit:
 - [ ] Every Behaviour example row, with the stated reader zone and now (B1–B9).
 - [ ] A range yields exactly one conversion with `epochMs`, `endEpochMs` and `dayShift` as in B1.
-- [ ] Every L1–L12 and L15 row gives exactly its stated result.
+- [ ] Every L1–L12 and L15 row gives exactly its stated result, including `noon UTC – 3 PM UTC` and `midnight UTC – 2 AM UTC` (L1).
 - [ ] Every Edge cases row.
 - [ ] B8: alternatives of an ambiguous range are whole ranges; `confidence` is `'low'`.
 - [ ] B9: `13:00 UTC-14:00 UTC` is a range; `Nov 13, 2026 10:00 UTC+2` is still an offset.
-- [ ] The existing left-alone cases `Call between 1:30–3:00 PM UTC`, `Open 1-3 PM UTC` and `Open 9:00 AM UTC to 5:00 PM` move to the conversion tests; `Score was 10:30-11:30 in the end` stays left alone.
+- [ ] Existing tests that flip: in `convert.test.ts` "things left alone", `Call between 1:30–3:00 PM UTC`, `Open 1-3 PM UTC` and `Open 9:00 AM UTC to 5:00 PM` move to the conversion tests (`Score was 10:30-11:30 in the end` stays); in `left-alone.test.ts`, `9 AM UTC-10 AM` and `Open 2 PM GMT-3 PM` (decision 2) and, under a site default, `Open 7 PM–9 PM`, `Open 7 PM to 9 PM` and `Open 7 PM–9 PM ET` (B3) move to the conversion tests. The other left-alone rows there (lists, `through`, `till`, `between … and`, noon/midnight, date after the last end) stay.
+- [ ] If decision 3 is (a): the same-label rows in `ranges.test.ts` become one conversion each, with one day marker (B7) and dates per B6 ("measures both day markers from the day the range starts", the range rows of "is marked against the date as converted"); `convert.test.ts` "converts both ends of a range when each has a zone" and `left-alone.test.ts` "still converts a hyphenated range of zoned times" expect one conversion. Different-label and list rows are unchanged.
 
 Annotator unit:
 - [ ] One icon per range, after the end (B10).
 - [ ] The popover shows the whole range; **Show original here** and the page-wide switches restore it exactly.
-- [ ] L13 and L14.
+- [ ] L14 (L13 is covered by the existing text-node boundary tests).
 
 End-to-end:
 - [ ] Fixture page: `1:30–3:00 PM UTC` converts with one icon and toggles back exactly; `9 AM, 1 PM and 5 PM UTC` stays untouched.
 
 ## Changes to docs/design.md
 
-- **When to convert:** add "A time that is one end of a range, or one item of a list sharing a zone, is never converted on its own."
-- **Output:** add that a range converts as one unit, shared parts are written on both ends only when needed (B6), and there is one day marker (B7). Overnight inference is capped at 12 h.
-- **Not handled yet:** replace the ranges bullet with the deferred shapes, and add lists.
+- **Ranges and lists:** replace the bullet that leaves ranges with a zone only on the last end, and zone-less ranges under a site default, alone with B1–B5; keep lists sharing a zone, weekday ranges and noon/midnight ranges left alone. Add the 12 h overnight cap.
+- **Output:** add that a range converts as one unit, shared parts are written on both ends only when needed (B6), and there is one day marker (B7); replace "In a time-only range, each end's marker is measured from the day the range starts" accordingly (decision 3, 6).
+- **Not handled yet:** replace "Ranges and lists whose ends do not each carry a zone" with the deferred shapes and lists sharing a zone.
 - **Decoration and popover:** "every recognised time or range gets one icon". **Show original here** acts on the whole range.
+
+## Revision history
+
+- 2026-11-13: Reconciled with #26 (commit 84d9d93): decision 4, B9, L6, L7 and L13 marked as already built; decision 3 narrowed to the open question for same-label zoned ranges; today's outputs re-run through the current engine (two examples already convert; L5 and L7 corrected; `noon UTC – 3 PM UTC` half-conversion added to L1); notes on #26's 24 h cap and per-end markers; existing tests that flip updated.

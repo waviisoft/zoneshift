@@ -35,7 +35,7 @@ No new permissions are needed.
 
 **B9. Unmirrorable** (no recognisable date/time, a range, or split across child elements): as B8.
 
-**B10. Live elements.** The icon goes right after the `<time>` element, outside it. Site changes to its text or `datetime` are re-evaluated within `MUTATION_DELAY`; Zoneshift's own writes are not. After two writes to one element, it falls back to B9.
+**B10. Live elements.** The converted text replaces the element's own text node with a `zoneshift-run`, as for any text (#26), so the original node can always be put back; the `zoneshift-icon` goes right after the `<time>` element, outside it. Stopping, `restore`, and content becoming editable put the original text node back and remove that icon. The element's text is judged against `datetime` alone, so the text-node boundary rule does not apply inside it; `<time>` stays a boundary for times outside it, as today. Site changes to its text or `datetime` are re-evaluated within `MUTATION_DELAY` (today the observer on `documentElement` sees added nodes and `contenteditable` only, so text and `datetime` changes need watching too); Zoneshift's own writes are not. After two writes to one element, it falls back to B9. Never-touched rules (editable content, SVG, form controls) apply first.
 
 **B11. Technical and ISO.** In `code`/`pre`/`samp`/`kbd`, or with ISO 8601 visible text, agreeing elements stay as written with a hollow icon until asked (existing rule).
 
@@ -58,6 +58,8 @@ Reader zone `America/Los_Angeles`; now 2026-11-13 10:00 AM PST (18:00Z).
 | `<time datetime="2026-11-13T09:00:00+01:00">13.11.2026 09:00</time>` | unchanged, hollow; popover `Fri, Nov 13, 2026, 12:00 AM PST` |
 | `<pre>… <time datetime="2026-11-13T09:00:00Z">2026-11-13T09:00:00Z</time></pre>` | unchanged, hollow; on request `2026-11-13T01:00:00-08:00` |
 
+Today (#26) every row is unchanged with no icon: the annotator skips `<time>`. The in-place outputs were checked against the current engine with the zone written out ("November 13, 2026 at 14:30 UTC" → "November 13, 2026 at 06:30 PST", "02:00 UTC+1" → "17:00 PST (−1 day)"), since it does not read `datetime`; popover texts (`Fri, Nov 13, 2026, …`) are new wording, not engine output.
+
 ## Left alone
 
 No icon and no change unless stated.
@@ -72,7 +74,7 @@ No icon and no change unless stated.
 | Local date-time, no offset | `2026-11-13T09:00`, `2026-11-13 09:00` |
 | Invalid | `2026-13-45T25:00Z`, `2026-11-13T09:00+25:00`, `Nov 13 2026 9:00 UTC`, `1763024400`, `""` |
 
-**L2.** Site-localising custom elements `relative-time`, `local-time`, `time-ago`, `time-until`, `<time is="relative-time">` (GitHub): no icon, and their fallback text (`Nov 13, 2026, 3:00 PM UTC`) is not processed.
+**L2.** Site-localising custom elements `relative-time`, `local-time`, `time-ago`, `time-until`, `<time is="relative-time">` (GitHub): no icon, and their fallback text (`Nov 13, 2026, 3:00 PM UTC`) is not processed. Today only `<time is=…>` is skipped; the other elements' text is annotated like any text, so they join the never-touched list.
 
 **L3.** `datetime`, `title`, `class` and `data-*` attributes are never modified; the element is never removed or replaced.
 
@@ -83,6 +85,8 @@ No icon and no change unless stated.
 **L6.** Date-only text whose `datetime` is midnight at its own offset (`2026-11-13T00:00:00Z`): a placeholder time.
 
 **L7.** Relative, date-only and unmirrorable text, even on **Convert all times on this page**; text outside the element ("Posted by").
+
+**L8.** `<time>` inside content Zoneshift never touches (editable regions, SVG and MathML, form controls): skipped as today, whatever its `datetime`.
 
 ## Edge cases
 
@@ -105,9 +109,9 @@ Reader `America/Los_Angeles` unless stated.
 ## Non-goals
 
 - Timestamps outside `<time>`: `title`-only spans, `data-time` attributes, JSON-LD and `itemprop="datePublished"` — no issue yet.
-- Ranges, numeric dates, non-English text — "Not handled yet" in docs/design.md.
+- Ranges ([Time ranges](Spec:-Time-ranges), #11), numeric dates (#12), non-English text — "Not handled yet" in docs/design.md.
 - Per-site setting to hide relative-text icons — settings (roadmap 4).
-- Alternative readings, **This is wrong** — own issues.
+- Alternative readings ([Alternative readings](Spec:-Alternative-readings), #17), **This is wrong** — own issues.
 
 ## Acceptance tests
 
@@ -119,7 +123,9 @@ Reader `America/Los_Angeles` unless stated.
 | B4 | Engine unit | Every example and edge-case string exactly; `IST`/`CST`/`EST`-in-July resolve high, no alternatives |
 | B5, B6 | Annotator unit | Both "Read as" wordings; disagreement note; convert gives orange; page-wide convert skips |
 | B7–B9, L7 | Annotator unit | Text unchanged, hollow icon, no convert button; date-only icon only when date differs |
-| B10, L3 | Annotator unit | Icon is the element's next sibling; attributes identical after annotate, convert, revert |
+| B10, L3 | Annotator unit | Icon is the element's next sibling; attributes identical after annotate, convert, revert; stop and `restore` put back the same text node and remove the icon |
+| B4 | Annotator unit | The existing test listing `<time datetime="2026-11-13T01:30Z">1:30 AM UTC</time>` among markup that is never marked flips: it now converts |
+| L2, L8 | Annotator unit | `relative-time` and friends, and `<time>` in an editable region, unchanged with no icon |
 | B11 | Annotator unit | `<time>` in `pre` and ISO text start as written |
 | L2, L4–L6 | Annotator unit | No icon, no DOM change |
 | Decision 5 | Annotator unit | `<time datetime="2026-11-13">Nov 13, 9:00 AM UTC</time>` converted by text rules |
@@ -132,8 +138,14 @@ Reader `America/Los_Angeles` unless stated.
 ## Changes to docs/design.md
 
 - **When to convert**: `<time datetime>` instants first in the trust order; new "Machine-readable times" subsection (B1–B11).
+- **Never touched**: remove "`<time>` elements (for now)"; add `relative-time`, `local-time`, `time-ago`, `time-until` (L2).
+- **Text-node boundaries**: the text inside `<time>` is judged against `datetime`, not its neighbours (B10).
 - "Date-only text and relative phrases are left alone": add "inside `<time>` they may get a hollow icon".
 - **Not handled yet**: remove `<time datetime>` elements.
 - **Decoration and popover**: hollow icons may lack a convert action; `<time>` icon after the element; disagreement note; "machine-readable time" wording.
-- **MutationObserver**: `<time>` text and `datetime` changes are re-evaluated, own writes ignored, two-write limit.
+- **MutationObserver**: `<time>` text and `datetime` changes are re-evaluated (the observer also watches text changes and the `datetime` attribute), own writes ignored, two-write limit.
 - **Roadmap 3**: remove `<time>` elements from "Remaining".
+
+## Revision history
+
+- 2026-11-13: Reconciled with #26 (commit 84d9d93): confirmed `<time>` is still skipped; B10 aligned with custom elements, `restore`/stop, the text-node boundary rule and the observer on `documentElement` (which today sees no text or `datetime` changes); L2 notes the custom elements are not skipped today; L8 added; in-place example outputs checked against the current engine with the zone written out (all unchanged); acceptance tests add the existing test that flips and restore; design.md edits cover the never-touched list.

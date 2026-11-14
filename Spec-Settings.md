@@ -6,16 +6,17 @@ The reader can turn Zoneshift off per site, have a site remember "convert all" o
 
 ## Decisions for the owner
 
-1. **Permissions.** `storage` is already in the manifest (`wxt.config.ts`); confirm it. For per-site state the popup can (a) message the page's content script, needing nothing more, or (b) add `activeTab` to read the tab's address. **Recommended: (a) — `storage` only.** No new permission; same on Safari. Cost: one generic message on pages Zoneshift cannot run on (B11).
+1. **Permissions.** The extension requests no permissions today: #26 removed `storage` from the manifest until this spec is approved, and an end-to-end test (`manifest.spec.ts`) asserts the empty list. **Approving this spec means agreeing to add `storage`.** For per-site state the popup can then (a) message the page's content script, needing nothing more, or (b) also add `activeTab` to read the tab's address. **Recommended: (a) — add `storage` and nothing else.** One permission; works the same on Safari. Cost: one generic message on pages Zoneshift cannot run on (B11).
 2. **`storage.local` or `storage.sync`.** Sync means no request from the extension, but the vendor's account sync copies the data, including the site list, to its servers. **Recommended: local** — nothing leaves the device, consistent with "makes no network requests"; Chrome's ~100 KB sync quota would also cap the site list. Feedback reports (#19) are local either way.
 3. **What a "site" is.** Hostname, registrable domain, or origin. **Recommended: hostname, leading `www.` removed** — predictable and data-free. Registrable domain needs a bundled public-suffix list kept current (else it merges `alice.github.io` with `bob.github.io`); origin splits `http`/`https` and ports, which readers would not expect.
 4. **Remembering the page-wide choice.** (a) Every page-wide tap is remembered for the site; (b) a separate "Remember for this site" tap. **Recommended: (a)** — one tap fewer; the popup always shows it with **Forget**.
-5. **Do preferred readings keep the orange flag?** **Recommended: yes** — a label is never silently reinterpreted, and a global preference is easy to forget.
+5. **Do preferred readings keep the orange flag?** **Recommended: yes** — a label is never silently reinterpreted, and a global preference is easy to forget. See decision 11 for how this fits a pick made on the page.
 6. **Private windows.** (a) Stored settings apply; changes made there last until the last private window closes and are never saved; (b) save as normal. **Recommended: (a)** — a saved hostname is a record of a visit.
 7. **#21 default zone per site.** (a) Define its storage key and a reserved slot here, #21 adds control and rules; (b) ship the control here. **Recommended: (a)** — storage is cheap (the engine already accepts a default zone), but zone-less conversion has its own reader-visible rules to specify and test.
 8. **Counts in the popup** ("12 times found · 9 converted"). **Recommended: include** — the only proof Zoneshift ran on a page; one message.
 9. **Export/import.** **Recommended: out of v1** — little data, the versioning rule (B17) keeps it possible, and it avoids validating imported files now.
 10. **Pull requests** (rule: one PR per issue). (a) Split #20 into three sub-issues, one PR each; (b) three PRs referencing #20; (c) one PR. **Recommended: (a)**, each testable alone: PR 1 storage, versioning, engine reading preferences, live apply/restore, page-wide memory from the popover; PR 2 toolbar popup; PR 3 options page.
+11. **Icon colour: picked on this page versus remembered** (shared with [Alternative readings](Spec:-Alternative-readings) decision 4, so both pages agree). That spec recommends blue after a pick on the page; decision 5 here keeps a remembered preference orange. Options: (a) blue in both cases; (b) orange in both; (c) blue for a pick made on this page, orange when applied from memory (site or global). **Recommended: (c)** — a pick the reader just made is not a guess; a preference set long ago may not fit this page, and a label is never silently reinterpreted.
 
 ## Behaviour
 
@@ -43,12 +44,12 @@ The reader can turn Zoneshift off per site, have a site remember "convert all" o
 **Live effect**
 
 - **B5** Changes apply without reload, within 1 second, to every open tab they affect (site setting: that site's tabs; global: all tabs).
-- **B6** Turning a site off restores every marked time's original text, removes icons and popover, and stops annotating added content; the page's text is identical to the text it would have without Zoneshift. Turning it on annotates as on a fresh load.
-- **B7** Changing the target zone or a reading re-annotates open pages; per-time taps there are dropped, the page-wide choice stays.
+- **B6** Turning a site off restores every marked time's original text, removes icons and popover, and stops annotating added content; the page's text is identical to the text it would have without Zoneshift. The annotator's stop (#26) already does this, putting back the page's own text nodes; turning a site off uses it. Turning it on annotates as on a fresh load.
+- **B7** Changing the target zone or a reading re-annotates open pages (the annotator's `restore`, then annotate); per-time taps there are dropped, the page-wide choice stays.
 
 **Readings and page-wide memory**
 
-- **B8** A preferred reading changes only which meaning is shown first: the time stays orange, the other meanings stay on offer, and "Read as" names the source, e.g. "China Standard Time (your choice for this site)".
+- **B8** A preferred reading changes only which meaning is shown first: the time stays orange (decision 11), the other meanings stay on offer, and "Read as" names the source, e.g. "China Standard Time (your choice for this site)".
 - **B9** The page-wide buttons (popover and popup) store the choice for the site; later loads apply it from the start, including to added content. A remembered "Convert all" counts as the reader asking, so code and ISO timestamps convert too. **Forget** restores the built-in default.
 - **B10** "Browser zone" is read when the page loads; a reader who changes the system zone while travelling sees it after a reload.
 
@@ -122,7 +123,7 @@ SITES                                [ Filter ________ ]
 
 **Robustness and hooks**
 
-- **B13** Unreadable storage or an invalid value (wrong type, unknown label, zone the browser no longer knows) counts as the default. The page is still annotated and no error reaches it; the options page says "Some settings couldn't be read and were reset to defaults." Invalid values are replaced at the next save.
+- **B13** Unreadable storage or an invalid value (wrong type, unknown label, zone the browser no longer knows) counts as the default. A saved target zone the browser does not know is replaced by the browser zone before it reaches the engine, which would otherwise convert nothing (since #26 it returns no conversions for an invalid zone rather than throwing). The page is still annotated and no error reaches it; the options page says "Some settings couldn't be read and were reset to defaults." Invalid values are replaced at the next save.
 - **B14** A failed save shows "Couldn't save this change" and changes nothing on any page.
 - **B15** Private windows (where the reader allowed Zoneshift): stored settings apply; changes follow decision 6.
 - **B16** Hooks: #17 writes the site's remembered readings; #18 adds a site switch; #21 a site zone; #22 a global switch that the reader's settings always beat (B3); #19 keeps reports in their own local store, never deleted by reset or **Remove**.
@@ -143,6 +144,8 @@ SITES                                [ Filter ________ ]
 | Defaults | Build finished at 2026-11-13T04:10:09Z | unchanged, hollow icon |
 | Site remembers Convert all | Build finished at 2026-11-13T04:10:09Z | Build finished at 2026-11-12T20:10:09-08:00 |
 | Site remembers Show originals | Doors open 7:00 PM UTC | unchanged, hollow icon |
+
+Every converted text above is what the current engine (#26) gives with that target zone and season-mismatch option; the "CST = China" row is today's China alternative, which the preference would put first.
 
 ## Left alone
 
@@ -179,12 +182,12 @@ SITES                                [ Filter ________ ]
 ## Acceptance tests
 
 - [ ] Engine unit: a CST preference makes China primary, keeps `ambiguous-zone`, offers Central (B8); it does not affect "Central Standard Time", CDT or CT (L5).
-- [ ] Engine unit: an invalid target zone falls back to the browser zone without throwing (B13).
+- [ ] Annotator unit: a stored invalid target zone is replaced by the browser zone, so the page still converts (B13). The engine side (no conversions, no throw) is already tested in #26.
 - [ ] Engine unit: every row of the examples table, with the stated zone and now.
 - [ ] Annotator unit: site key for `www.`, subdomains, ports, `file://` (B1, L2).
 - [ ] Annotator unit: missing, invalid or newer-version data give defaults without throwing; unknown keys survive a save; a migration from the previous version runs once (B4, B13, B17).
 - [ ] Annotator unit: precedence site → global → default (B3).
-- [ ] Annotator unit: turning off restores exact original `textContent` and removes icons, popover and observer (B6, L1, L7).
+- [ ] Annotator unit: turning a site off restores exact original `textContent` (the same text nodes) and removes icons, popover and observer, through the existing stop (B6, L1, L7).
 - [ ] Annotator unit: a remembered page-wide choice applies at load and to added content, code/ISO included (B9, L3).
 - [ ] Annotator unit: a target-zone change re-annotates and drops per-time taps (B7, L6).
 - [ ] Annotator unit: a private-window change is not written to storage (B15, L9).
@@ -194,13 +197,18 @@ SITES                                [ Filter ________ ]
 - [ ] End-to-end: zone search finds "new york"; choosing it changes an open page without reload (B5, B12).
 - [ ] End-to-end: Remove and Reset restore defaults and leave feedback reports (B12, B16, L10).
 - [ ] End-to-end: a failed save shows the error and changes nothing (B14).
-- [ ] End-to-end: manifest permissions equal the approved list (decision 1).
+- [ ] End-to-end: manifest permissions equal the approved list (decision 1): the existing `manifest.spec.ts` test "asks for no permissions" flips to expect exactly `storage`, with no optional or host permissions.
 
 ## Changes to docs/design.md
 
-- **Settings**: replace the list with B1–B3 and a link to this spec; mark "Default zone per site" as #21.
+- **Settings**: replace "Not built yet. The extension currently requests no permissions; `storage` arrives with settings, once agreed" and the list with B1–B3, the `storage` permission (decision 1) and a link to this spec; mark "Default zone per site" as #21.
 - **Decoration and popover**: replace "Remembering that choice per site belongs with settings" with B9, including that a remembered "Convert all" counts as the reader asking.
 - **Zone labels**: a preferred reading changes only the order; the time stays flagged (B8).
+- **Decoration**: a reading applied from memory keeps the orange icon; one picked on the page is blue (decision 11, shared with Alternative readings).
 - **Architecture, item 3**: name the popup and options page, `storage.local` (or sync, per decision 2) and private-window handling (decision 6).
 - **Conversion rules**: "reader's zone" means the "Show times in" setting.
 - **Roadmap item 4**: settings in progress.
+
+## Revision history
+
+- 2026-11-13: Reconciled with #26 (commit 84d9d93): decision 1 rewritten, since `storage` is no longer in the manifest and approving this spec means agreeing to add it; decision 11 added so icon colour agrees with Alternative readings; B6, B7 and the off-switch test now build on the annotator's existing stop and `restore`; the invalid-target-zone test moved from the engine (which now returns no conversions instead of throwing) to the annotator; the manifest test that flips named; examples re-run through the current engine (unchanged).
