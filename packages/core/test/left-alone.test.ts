@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { convertText } from '../src';
+import { convertText, findConversions } from '../src';
 
 // A wrong conversion is worse than a missed one: each group below lists text the
 // engine must leave exactly as written, then nearby text it must still convert,
@@ -149,11 +149,37 @@ describe('a weekday that contradicts its date', () => {
 });
 
 describe('an offset the engine does not read', () => {
-  it.each(['14:00 UTC - 5', '14:00 GMT  +  1'])('%s', (text) => {
+  it.each(['14:00 UTC - 5', '14:00 GMT  +  1', 'Lunch 12:00 UTC-13:00 daily'])('%s', (text) => {
     expect(la(text)).toBe(text);
+  });
+
+  it('still reads offsets from −12 to +14', () => {
+    expect(la('12:00 UTC-12:00')).toBe('16:00 PST');
+    expect(la('12:00 UTC+14:00')).toBe('14:00 PST (−1 day)');
   });
 
   it('still converts a hyphenated range of zoned times', () => {
     expect(la('1 PM UTC - 3 PM UTC')).toBe('5 AM PST - 7 AM PST');
+  });
+});
+
+describe('an offset followed by a label that does not confirm it', () => {
+  it.each([
+    // "+" is never a range dash, so a wrong label cannot be explained away.
+    '3:00 PM UTC+01:00 PST',
+    // ET is UTC−5 in November: offset and label disagree.
+    '10:00 UTC-04:00 ET',
+    // A hyphen that could be a range, but the two ends are the same instant.
+    '9:00 UTC-10:00 CET',
+  ])('%s', (text) => {
+    expect(findConversions(text, { targetZone: LA, now: NOW })).toEqual([]);
+  });
+
+  it.each(['2 PM UTC −3 PM UTC', '2 PM UTC+3 PM UTC'])('%s (a sign is not a range dash)', (text) => {
+    expect(la(text)).toBe(text);
+  });
+
+  it('does not let a later time take the site default after a sign', () => {
+    expect(to(LA, 'Europe/Berlin')('10:00 UTC+5 PM')).toBe('10:00 UTC+5 PM');
   });
 });

@@ -8,6 +8,12 @@ export interface ZoneReading {
 export interface ResolvedZone {
   primary: ZoneReading;
   /**
+   * A zone label written after a UTC/GMT offset ("UTC+5:30 IST"). The offset
+   * is the reading; the label only confirms it, and a conversion is made only
+   * when one of the label's meanings has that offset at the instant.
+   */
+  label?: ResolvedZone;
+  /**
    * For a standard/daylight abbreviation: the region whose clocks it normally
    * describes. Used to detect "EST" written on a date that region is on EDT.
    */
@@ -119,7 +125,7 @@ const TABLE: Record<string, Entry> = {
 export const ZONE_TABLE: Readonly<Record<string, Entry>> = TABLE;
 
 const LONG_NAME = /^(Eastern|Central|Mountain|Pacific)(?:\s(Standard|Daylight))?\sTime$/;
-const UTC_OFFSET = /^(?:UTC|GMT)\s?([+\-−])\s?(\d{1,2})(?::?(\d{2}))?$/;
+const UTC_OFFSET = /^(?:UTC|GMT)\s?([+\-−])\s?(\d{1,2})(?::?(\d{2}))?(?:\s?\(?([A-Z]+)\)?)?$/;
 const ISO_OFFSET = /^([+\-−])(\d{2})(?::?(\d{2}))?$/;
 
 const abbreviations = Object.keys(TABLE)
@@ -129,11 +135,14 @@ const abbreviations = Object.keys(TABLE)
 
 /**
  * What may not follow the digits of a UTC/GMT offset. In "9 AM UTC-10 AM UTC"
- * the "-10" is followed by a meridiem and another zone, so it is the start of
- * the range's second end, not an offset.
+ * the "-10" is followed by a meridiem, so it is the start of the range's
+ * second end, not an offset. An offset followed by a zone label
+ * ("9:00 GMT-10:00 HST") is matched with the label; the caller decides
+ * whether the label confirms the offset or the hyphen was a range dash.
  */
-const NOT_A_TIME =
-  '(?!\\d|:\\d)(?!\\s?[AaPp]\\.?[Mm](?![A-Za-z]))' + `(?!\\s?\\(?(?:UTC|GMT|${abbreviations})(?![A-Za-z]))`;
+const NOT_A_TIME = '(?!\\d|:\\d)(?!\\s?[AaPp]\\.?[Mm](?![A-Za-z]))';
+/** A zone label after an offset: "UTC+5:30 IST", "GMT-10:00 (HST)". */
+const OFFSET_LABEL = `(?:\\s?\\((?:UTC|GMT|${abbreviations})\\)|\\s?(?:UTC|GMT|${abbreviations}))`;
 
 /**
  * Regex source matching a zone label that follows a time. A UTC/GMT offset may
@@ -141,7 +150,13 @@ const NOT_A_TIME =
  * "UTC - 5", with a hyphen between spaces, reads as a range and is not an offset.
  */
 export const ZONE_PATTERN =
-  `(?:UTC|GMT)(?:(?:\\s?[+−]\\s?|\\s?-)\\d{1,2}(?::?\\d{2})?${NOT_A_TIME})?` +
+  `(?:UTC|GMT)(?:(?:\\s?[+−]\\s?|\\s?-)\\d{1,2}(?::?\\d{2})?${NOT_A_TIME}${OFFSET_LABEL}?)?` +
+  '|(?:Eastern|Central|Mountain|Pacific)(?:\\s(?:Standard|Daylight))?\\sTime' +
+  `|(?:${abbreviations})`;
+
+/** ZONE_PATTERN without UTC/GMT offsets: used to re-read "9:00 GMT-10:00 GMT" as a range. */
+export const ZONE_PATTERN_NO_OFFSET =
+  '(?:UTC|GMT)' +
   '|(?:Eastern|Central|Mountain|Pacific)(?:\\s(?:Standard|Daylight))?\\sTime' +
   `|(?:${abbreviations})`;
 
@@ -151,7 +166,8 @@ function toRef(zone: number | string): ZoneRef {
 
 function fixed(sign: string, hours: string, minutes: string | undefined, label: string): ResolvedZone | null {
   const total = Number(hours) * 60 + Number(minutes ?? 0);
-  if (total > 14 * 60 || Number(minutes ?? 0) > 59) return null;
+  // Real offsets run from UTC−12 to UTC+14.
+  if (total > (sign === '+' ? 14 : 12) * 60 || Number(minutes ?? 0) > 59) return null;
   const offsetMinutes = sign === '+' ? total : -total;
   return { primary: { ref: { kind: 'fixed', offsetMinutes }, description: label }, alternatives: [] };
 }
@@ -160,8 +176,15 @@ function fixed(sign: string, hours: string, minutes: string | undefined, label: 
 export function resolveZone(token: string): ResolvedZone | null {
   if (token === 'Z') return resolveZone('UTC');
 
-  let m = UTC_OFFSET.exec(token) ?? ISO_OFFSET.exec(token);
-  if (m) return fixed(m[1]!, m[2]!, m[3], token.startsWith('U') || token.startsWith('G') ? token : `UTC${token}`);
+  let m = UTC_OFFSET.exec(token);
+  if (m) {
+    const resolved = fixed(m[1]!, m[2]!, m[3], token);
+    if (!resolved || !m[4]) return resolved;
+    const label = resolveZone(m[4]);
+    return label ? { ...resolved, label } : null;
+  }
+  m = ISO_OFFSET.exec(token);
+  if (m) return fixed(m[1]!, m[2]!, m[3], `UTC${token}`);
 
   let key = token;
   m = LONG_NAME.exec(token);

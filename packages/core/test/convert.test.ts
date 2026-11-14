@@ -63,6 +63,20 @@ describe('date and time together', () => {
     expect(la('14:00 GMT +1')).toBe('05:00 PST');
   });
 
+  it.each([
+    ['Kickoff 14:00 UTC+5:30 IST', LA, 'Kickoff 00:30 PST', Date.UTC(2026, 10, 12, 8, 30)],
+    ['3:00 PM UTC+01:00 CET', LA, '6:00 AM PST', Date.UTC(2026, 10, 11, 14)],
+    ['18:00 GMT+10:00 AEST', LA, '00:00 PST', Date.UTC(2026, 10, 12, 8)],
+    ['9:00 GMT-10:00 HST', LA, '11:00 PST', Date.UTC(2026, 10, 11, 19)],
+    ['10:00 UTC-08:00 PST', 'America/New_York', '13:00 EST', Date.UTC(2026, 10, 11, 18)],
+    ['10:00 UTC +09:00 JST', LA, '17:00 PST (−1 day)', Date.UTC(2026, 10, 12, 1)],
+    ['14:00 UTC+5:30 (IST)', LA, '00:30 PST', Date.UTC(2026, 10, 12, 8, 30)],
+  ])('reads "%s" once, at the written offset, label included', (text, zone, converted, instant) => {
+    const found = findConversions(text, { targetZone: zone, now: NOW });
+    expect(found.map((c) => c.epochMs)).toEqual([instant]);
+    expect(convertText(text, { targetZone: zone, now: NOW })).toBe(converted);
+  });
+
   it('mirrors the hour padding of the original next to an ISO date', () => {
     expect(la('2026-11-13 1:00 PM UTC')).toBe('2026-11-13 5:00 AM PST');
   });

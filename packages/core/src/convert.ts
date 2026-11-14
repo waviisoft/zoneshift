@@ -1,6 +1,6 @@
 import type { Alternative, Conversion, ConvertOptions, Flag, ZoneRef } from './types';
 import { fieldsAt, formatOffset, isValidZone, offsetAt, shortZoneName, toEpoch, type Fields } from './tz';
-import { resolveZone, ZONE_PATTERN, type ZoneReading } from './zones';
+import { resolveZone, ZONE_PATTERN, ZONE_PATTERN_NO_OFFSET, type ResolvedZone, type ZoneReading } from './zones';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MONTHS = [
@@ -22,12 +22,13 @@ const LEFT_JOIN = '(?:,?\\s+(?:at\\s+|@\\s*)?|\\s*[-–—|]\\s+)';
 const RIGHT_JOIN = '^(?:,?\\s+(?:on\\s+)?|\\s*[-–—|]\\s+)';
 
 /** A time, optionally followed by a zone. Every candidate conversion starts here. */
-const ANCHOR = new RegExp(
+const anchorSource = (zone: string) =>
   `(?<![\\d:.])(?<hour>\\d{1,2})(?!\\d)(?::(?<minute>\\d{2})(?!\\d)(?::(?<second>\\d{2})(?:[.,]\\d{1,9})?)?)?` +
-    `(?:\\s?(?<mer>${MER})(?![A-Za-z]))?` +
-    `(?:(?<isoz>Z|[+\\-−]\\d{2}(?::?\\d{2})?)(?![\\dA-Za-z:])|\\s?\\(?(?<zone>${ZONE_PATTERN})(?![A-Za-z]))?`,
-  'dg',
-);
+  `(?:\\s?(?<mer>${MER})(?![A-Za-z]))?` +
+  `(?:(?<isoz>Z|[+\\-−]\\d{2}(?::?\\d{2})?)(?![\\dA-Za-z:])|\\s?\\(?(?<zone>${zone})(?![A-Za-z]))?`;
+const ANCHOR = anchorSource(ZONE_PATTERN);
+/** The same, reading "GMT-10:00 GMT" as "GMT" followed by a range dash. */
+const ANCHOR_NO_OFFSET = anchorSource(ZONE_PATTERN_NO_OFFSET);
 
 /** Date forms that may sit directly before the time. */
 const LEFT_DATES = [
@@ -44,8 +45,11 @@ const RIGHT_DATES = [
   new RegExp(`${RIGHT_JOIN}(?<wd>${WD})${END}`, 'd'),
 ];
 
-/** Words and marks that join the ends of a range ("1–3 PM", "9 till 5"). */
-const RANGE_WORD = '(?:[-–—−~]|to|until|till|til|through|thru)';
+/**
+ * Words and marks that join the ends of a range ("1–3 PM", "9 till 5"). A plus
+ * sign or Unicode minus is never a range dash: after UTC/GMT it is an offset.
+ */
+const RANGE_WORD = '(?:[-–—~]|to|until|till|til|through|thru)';
 /** Words and marks that join the items of a list ("1:30 or 3:00", "1:30/3:00"). */
 const LIST_WORD = '(?:and|or|&|/|,)';
 
@@ -57,6 +61,8 @@ const RANGE_BEFORE = new RegExp(
   `(?:(?:\\d{1,2}:\\d{2}(?::\\d{2})?|${MER})\\s*(?:${RANGE_WORD}|${LIST_WORD})\\s*` +
     `|(?<![\\d:.])\\d{1,2}(?:\\s*[-–—−~/&]\\s*|\\s+(?:to|until|till|til|through|thru|and|or)\\s+))$`,
 );
+/** A sign between a bare UTC/GMT and the next time ("2 PM UTC −3 PM UTC"). */
+const SIGN_BEFORE = /(?:UTC|GMT)\s*[+\-−]\s*$/;
 /** Text after a match that makes it the earlier end of a range or list. */
 const RANGE_AFTER = new RegExp(
   `^\\s*(?:${RANGE_WORD}\\s*(?=\\d)|${LIST_WORD}\\s*(?=\\d{1,2}(?::\\d{2}|\\s?${MER})))`,
@@ -327,10 +333,38 @@ function sourceFields(c: Candidate, today: Fields & { weekday: number }): Fields
   return { year, month, day, hour, minute, second };
 }
 
-function collectCandidates(text: string, allowZoneless: boolean): Candidate[] {
+const primaryOffset = (z: ResolvedZone) => (z.primary.ref.kind === 'fixed' ? z.primary.ref.offsetMinutes : undefined);
+
+/** Offsets a zone label can have, at the instants given. */
+function labelOffsets(label: ResolvedZone, instants: number[]): number[] {
+  const refs: ZoneRef[] = [label.primary.ref, ...label.alternatives.map((a) => a.ref)];
+  if (label.region) refs.push({ kind: 'iana', id: label.region });
+  return instants.flatMap((t) => refs.map((r) => offsetAt(r, t)));
+}
+
+function collectCandidates(text: string, allowZoneless: boolean, now: number): Candidate[] {
   const out: Candidate[] = [];
   let prevEnd = 0;
-  for (const m of text.matchAll(ANCHOR) as IterableIterator<RegExpExecArray>) {
+  const year = new Date(now).getUTCFullYear();
+  const seasons = [Date.UTC(year, 0, 15), Date.UTC(year, 6, 15)];
+  const anchors = new RegExp(ANCHOR, 'dg');
+  for (let m = anchors.exec(text); m; m = anchors.exec(text)) {
+    // "9:00 GMT-10:00 GMT": the label can never have the offset, so with a
+    // hyphen this is a range. (With "+" or "−" it is an offset with a wrong
+    // label, which fails when converted.)
+    const zone = m.groups!.zone;
+    const resolved = zone ? resolveZone(zone) : null;
+    if (resolved?.label && /^(?:UTC|GMT)\s?-/.test(zone!) && primaryOffset(resolved) !== undefined) {
+      if (!labelOffsets(resolved.label, seasons).includes(primaryOffset(resolved)!)) {
+        const plain = new RegExp(ANCHOR_NO_OFFSET, 'dy');
+        plain.lastIndex = m.index;
+        const p = plain.exec(text);
+        if (p) {
+          m = p;
+          anchors.lastIndex = p.index + p[0].length;
+        }
+      }
+    }
     const g = m.groups!;
     if (!g.minute && !g.mer) continue;
     if (!g.zone && !g.isoz && !(allowZoneless && g.mer)) continue;
@@ -362,9 +396,10 @@ function collectCandidates(text: string, allowZoneless: boolean): Candidate[] {
     }
 
     // Date after the time, unless another time follows it ("1 PM UTC – Fri 2 AM UTC").
+    const openParen = (m[0].match(/\(/g)?.length ?? 0) > (m[0].match(/\)/g)?.length ?? 0);
     if (!dateMatch) {
       const rightText = text.slice(end, end + LEFT_WINDOW);
-      const closing = g.zone && text[end] === ')' && m[0].includes('(') ? 1 : 0;
+      const closing = g.zone && text[end] === ')' && openParen ? 1 : 0;
       for (const re of RIGHT_DATES) {
         const r = re.exec(rightText.slice(closing));
         if (r) {
@@ -379,7 +414,7 @@ function collectCandidates(text: string, allowZoneless: boolean): Candidate[] {
 
     parts.sort((a, b) => a.start - b.start);
     // Pull a closing parenthesis into the match so a day marker lands outside it.
-    if (g.zone && m[0].includes('(') && text[end] === ')' && parts.at(-1)!.type === 'zone') end += 1;
+    if (g.zone && openParen && text[end] === ')' && parts.at(-1)!.type === 'zone') end += 1;
 
     out.push({
       text,
@@ -430,14 +465,21 @@ function applyGuards(text: string, cands: Candidate[]): void {
     // site default, "1:30 or 3:00 PM UTC" are left alone).
     if (c.link) {
       if (!c.zoneToken || !prev!.zoneToken) drop();
-    } else if (RANGE_BEFORE.test(text.slice(Math.max(prev?.end ?? 0, c.start - 24), c.start))) drop();
+    } else {
+      const before24 = text.slice(Math.max(prev?.end ?? 0, c.start - 24), c.start);
+      if (RANGE_BEFORE.test(before24)) drop();
+      // "2 PM UTC −3 PM UTC": the sign is not a range dash, and not an offset we read.
+      if (SIGN_BEFORE.test(text.slice(Math.max(0, c.start - 8), c.start))) drop();
+    }
     if (!nextLinked && RANGE_AFTER.test(after)) drop();
 
     // "8 PM ET/PT": the time is given for several zones.
     if (c.zoneToken && !nextLinked && SLASH_AFTER.test(afterTime)) drop();
 
     // "14:00 UTC - 5": an offset we did not read. Never convert without it.
-    if (c.zoneToken && /^(?:UTC|GMT)$/.test(c.zoneToken) && !nextLinked && LOOSE_OFFSET_AFTER.test(afterTime)) drop();
+    // Not cut at the next candidate: in "UTC+5 PM" the next one starts after the sign.
+    const signAfter = text.slice(c.timeEnd, c.timeEnd + CONTEXT);
+    if (c.zoneToken && /^(?:UTC|GMT)$/.test(c.zoneToken) && !nextLinked && LOOSE_OFFSET_AFTER.test(signAfter)) drop();
 
     // A zone-less time next to a zone written in words is not given the site default.
     if (!c.zoneToken) {
@@ -497,10 +539,12 @@ function convertOne(
   let primary: ZoneReading;
   let region: string | undefined;
   let otherMeanings: ZoneReading[] = [];
+  let label: ResolvedZone | undefined;
 
   if (c.zoneToken) {
     const resolved = resolveZone(c.zoneToken);
     if (!resolved) return null;
+    label = resolved.label;
     ({ primary, region } = resolved);
     otherMeanings = resolved.alternatives;
   } else {
@@ -539,6 +583,9 @@ function convertOne(
   let chosen = read(primary);
   if (!chosen) return null;
   const others: Reading[] = [];
+
+  // "UTC+5:30 IST": the label must have the written offset at that instant.
+  if (label && !labelOffsets(label, [chosen.epochMs]).includes(primaryOffset({ primary, alternatives: [] })!)) return null;
 
   // "EST" on a date its region observes EDT: offer both readings.
   if (region && primary.ref.kind === 'fixed' && offsetAt({ kind: 'iana', id: region }, chosen.epochMs) !== primary.ref.offsetMinutes) {
@@ -624,7 +671,7 @@ export function findConversions(text: string, options: ConvertOptions = {}): Con
     seasonMismatch: options.seasonMismatch ?? 'regional',
   };
 
-  const cands = collectCandidates(text, ctx.defaultZone !== undefined);
+  const cands = collectCandidates(text, ctx.defaultZone !== undefined, ctx.now);
   applyGuards(text, cands);
 
   const results: Conversion[] = [];
