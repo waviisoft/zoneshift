@@ -17,11 +17,13 @@ Decisions and their reasons are recorded in the [Decision log](Decision-log).
 
 | Spec | Issue | Status |
 |---|---|---|
+| [Conversion rules](Spec:-Conversion-rules) | #3–#6 | As built in #26 |
+| [Page annotation](Spec:-Page-annotation) | #7–#10 | As built in #26 |
 | [Alternative readings](Spec:-Alternative-readings) | [#17](https://github.com/waviisoft/zoneshift/issues/17) | Draft |
 | [Time elements](Spec:-Time-elements) | [#15](https://github.com/waviisoft/zoneshift/issues/15) | Draft |
 | [Time ranges](Spec:-Time-ranges) | [#11](https://github.com/waviisoft/zoneshift/issues/11) | Draft |
 | [Settings](Spec:-Settings) | [#20](https://github.com/waviisoft/zoneshift/issues/20) | Draft |
 
-## Built without a spec page
+## The first slice
 
-The first slice (conversion engine, clock icon, popover, opt-in log and ISO timestamps, late-added content: issues #2–#10) was built from `docs/design.md` and is in [pull request #26](https://github.com/waviisoft/zoneshift/pull/26).
+The conversion engine, clock icon, popover, opt-in log and ISO timestamps, and late-added content (issues #2–#10) were built from `docs/design.md` in [pull request #26](https://github.com/waviisoft/zoneshift/pull/26). The two *As built* pages record what it does and the decisions made in its review.

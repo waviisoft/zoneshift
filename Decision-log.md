@@ -27,7 +27,7 @@ Decisions about Zoneshift, newest first within each section. A spec page holds t
 
 ## Engine (Build)
 
-Written down in `docs/design.md` and tested in `packages/core/test`. Decided in the first slice and its review ([#26](https://github.com/waviisoft/zoneshift/pull/26)).
+Full detail: [Conversion rules](Spec:-Conversion-rules). Also written down in `docs/design.md` and tested in `packages/core/test`. Decided in the first slice and its review ([#26](https://github.com/waviisoft/zoneshift/pull/26)).
 
 | Date | Decision | Why |
 |---|---|---|
@@ -39,12 +39,14 @@ Written down in `docs/design.md` and tested in `packages/core/test`. Decided in 
 | 2026-11-13 | `+` and the Unicode minus are never a range dash. A hyphen after UTC/GMT is an offset unless what follows makes it a second time. An offset may carry its own label ("UTC+5:30 IST") and is read once when they agree. Negative offsets stop at −12. | "9 AM UTC-10 AM UTC" was read as UTC−10. |
 | 2026-11-13 | A bare Zulu time ("10:00Z") is shown with the zone name; a full ISO timestamp keeps its ISO shape with a numeric offset. | "02:00-08:00" reads like a range. |
 | 2026-11-13 | A site default zone is not applied when a zone is written in words next to the time ("7 PM Pacific", "7 PM London time"). | The default would override what the page says. |
-| 2026-11-13 | A spelled-out standard or daylight name ("Central Standard Time") has no alternatives; only abbreviations and generic names do. | The full name is not ambiguous. |
+| 2026-11-13 | A spelled-out standard or daylight name ("Central Standard Time") has no other meanings (it is not offered China Standard Time). It is still flagged, with the literal reading offered, when used in the wrong season. | The full name is not ambiguous, but a wrong-season name is still never silently reinterpreted. |
 | 2026-11-13 | An invalid target zone gives no conversions; it does not throw. | A bad setting must never break a page. |
 | Earlier | Custom parser, no `chrono-node`; the engine has no dependencies. | Mirroring the original format needs the position of every date part, and region-based zones meant overriding most of the library. |
 | Earlier | "3 PM EST" in July defaults to the region's local time, flagged low-confidence, with the literal reading offered. `MST`, `HST` and `AEST` are always read literally. | |
 
 ## Page and extension (Build)
+
+Full detail: [Page annotation](Spec:-Page-annotation).
 
 | Date | Decision | Why |
 |---|---|---|
