@@ -51,6 +51,26 @@ describe('a dated range', () => {
   });
 });
 
+describe('a later end that falls on another day than the first', () => {
+  const tokyo = to('Asia/Tokyo');
+
+  it('is marked against the date as converted', () => {
+    expect(tokyo('Office hours on Nov 13, 2026 at 9 AM UTC and 9 PM UTC')).toBe(
+      'Office hours on Nov 13, 2026 at 6 PM GMT+9 and 6 AM GMT+9 (+1 day)',
+    );
+    expect(tokyo('Office hours on Thursday at 9 AM UTC and 9 PM UTC')).toBe(
+      'Office hours on Thursday at 6 PM GMT+9 and 6 AM GMT+9 (+1 day)',
+    );
+    expect(tokyo('Nov 13, 2026 9 AM UTC – 9 PM UTC')).toBe('Nov 13, 2026 6 PM GMT+9 – 6 AM GMT+9 (+1 day)');
+    const [, end] = findConversions('Nov 13, 2026 9 AM UTC – 9 PM UTC', { targetZone: 'Asia/Tokyo', now: NOW });
+    expect(end).toMatchObject({ dayShift: 1, epochMs: Date.UTC(2026, 10, 13, 21) });
+  });
+
+  it('is not marked when it falls on the same day', () => {
+    expect(tokyo('Nov 13, 2026 1 AM UTC – 3 AM UTC')).toBe('Nov 13, 2026 10 AM GMT+9 – 12 PM GMT+9');
+  });
+});
+
 describe('a time-only range', () => {
   it('ends at the first such time after the start', () => {
     expect(la('11:30 PM UTC – 1:30 AM UTC')).toBe('3:30 PM PST – 5:30 PM PST');

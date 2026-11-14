@@ -93,7 +93,7 @@ describe('a time next to a date the engine cannot read', () => {
     '2026-W27-6T18:00Z',
     'Ends Friday 11/13 at 11:59 PM ET',
     '6:00 PM UTC on 07/04/2026',
-    'Thursday, Nov 12 · 7:00 PM EST',
+    'nov 12 · 7:00 PM EST',
     'tomorrow at 6 PM UTC',
     '1 AM UTC on Mondays',
   ])('%s', (text) => {
@@ -181,5 +181,28 @@ describe('an offset followed by a label that does not confirm it', () => {
 
   it('does not let a later time take the site default after a sign', () => {
     expect(to(LA, 'Europe/Berlin')('10:00 UTC+5 PM')).toBe('10:00 UTC+5 PM');
+  });
+});
+
+describe('a range ending at noon or midnight', () => {
+  it.each(['It runs 9 AM ET to noon', 'noon to 9 PM ET', 'Open 9 PM ET – midnight', 'Open 9 PM ET until Midnight'])(
+    '%s',
+    (text) => {
+      expect(to('UTC')(text)).toBe(text);
+    },
+  );
+
+  it('still converts a time in the same sentence as noon', () => {
+    expect(to('UTC')('Lunch at noon, call at 3 PM ET')).toBe('Lunch at noon, call at 8 PM UTC');
+  });
+});
+
+describe('a range whose ends have different labels and would run almost a day', () => {
+  it.each(['Nov 13, 2026 9 PM PT – 11 PM ET', 'Jul 13, 2026 1:30 PM UTC – 3:00 PM CEST'])('%s', (text) => {
+    expect(to('UTC')(text)).toBe(text);
+  });
+
+  it('still converts one that runs forwards on the written date', () => {
+    expect(to('UTC')('Nov 13, 2026 1 PM ET – 3 PM PT')).toBe('Nov 13, 2026 6 PM UTC – 11 PM UTC');
   });
 });

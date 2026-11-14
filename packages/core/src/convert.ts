@@ -18,7 +18,8 @@ const END = '(?![A-Za-z\\d])';
 const DAY = '(?<day>\\d{1,2})(?<ord>st|nd|rd|th)?';
 const YEAR_OPT = '(?:,?\\s+(?<year>\\d{4}))?';
 const WD_OPT = `(?:(?<wd>${WD})\\.?,?\\s+)?`;
-const LEFT_JOIN = '(?:,?\\s+(?:at\\s+|@\\s*)?|\\s*[-–—|]\\s+)';
+// Also the separators of event listings: "Thu, Nov 12 · 7:00 PM", "Nov 12: 7:00 PM".
+const LEFT_JOIN = '(?:,?\\s+(?:at\\s+|@\\s*)?|\\s*[-–—|]\\s+|\\s*[·•]\\s*|:\\s+)';
 const RIGHT_JOIN = '^(?:,?\\s+(?:on\\s+)?|\\s*[-–—|]\\s+)';
 
 /** A time, optionally followed by a zone. Every candidate conversion starts here. */
@@ -61,6 +62,9 @@ const RANGE_BEFORE = new RegExp(
   `(?:(?:\\d{1,2}:\\d{2}(?::\\d{2})?|${MER})\\s*(?:${RANGE_WORD}|${LIST_WORD})\\s*` +
     `|(?<![\\d:.])\\d{1,2}(?:\\s*[-–—−~/&]\\s*|\\s+(?:to|until|till|til|through|thru|and|or)\\s+))$`,
 );
+/** "noon to 9 PM ET", "9 PM ET – midnight": a range end the engine does not read. */
+const NOON_BEFORE = new RegExp(`(?<![A-Za-z])(?:noon|midnight)\\s*(?:${RANGE_WORD}|${LIST_WORD})\\s*$`, 'i');
+const NOON_AFTER = new RegExp(`^\\s*(?:${RANGE_WORD}|${LIST_WORD})\\s*(?:noon|midnight)(?![A-Za-z])`, 'i');
 /** A sign between a bare UTC/GMT and the next time ("2 PM UTC −3 PM UTC"). */
 const SIGN_BEFORE = /(?:UTC|GMT)\s*[+\-−]\s*$/;
 /** Text after a match that makes it the earlier end of a range or list. */
@@ -467,11 +471,11 @@ function applyGuards(text: string, cands: Candidate[]): void {
       if (!c.zoneToken || !prev!.zoneToken) drop();
     } else {
       const before24 = text.slice(Math.max(prev?.end ?? 0, c.start - 24), c.start);
-      if (RANGE_BEFORE.test(before24)) drop();
+      if (RANGE_BEFORE.test(before24) || NOON_BEFORE.test(before24)) drop();
       // "2 PM UTC −3 PM UTC": the sign is not a range dash, and not an offset we read.
       if (SIGN_BEFORE.test(text.slice(Math.max(0, c.start - 8), c.start))) drop();
     }
-    if (!nextLinked && RANGE_AFTER.test(after)) drop();
+    if (!nextLinked && (RANGE_AFTER.test(after) || NOON_AFTER.test(after))) drop();
 
     // "8 PM ET/PT": the time is given for several zones.
     if (c.zoneToken && !nextLinked && SLASH_AFTER.test(afterTime)) drop();
@@ -519,8 +523,12 @@ interface Previous {
   dated: boolean;
   /** The text of the group's first end carried a date. */
   hasDate: boolean;
-  /** Source date day markers are measured from, or null when the group is dated. */
-  markerDate: Fields | null;
+  /**
+   * What day markers on later ends that take this group's date are measured
+   * from: the source date for a time-only group ("1:30 AM UTC – 3:00 AM UTC"),
+   * the date as converted for a dated one ("Nov 13 9 AM UTC – 9 PM UTC").
+   */
+  markerDate: Fields;
 }
 
 type Reading = { reading: ZoneReading; fields: Fields; epochMs: number };
@@ -559,11 +567,13 @@ function convertOne(
   const inherit = prev !== undefined && !ownDate;
   let dayOffset = 0;
 
-  // Same label: the date as written for the end before. Another label: the
-  // date the end before falls on in this end's zone.
+  // A range end, or a list item with the same label, takes the date as written
+  // for the end before. A list item with another label ("11 PM PT / 2 AM ET")
+  // takes the date the item before falls on in its own zone.
   const sameLabel = inherit && c.zoneToken !== undefined && c.zoneToken === prev.zoneToken;
+  const writtenDate = sameLabel || c.link === 'range';
   const read = (reading: ZoneReading): Reading | null => {
-    const base = !inherit ? null : sameLabel ? prev.fields : fieldsAt(reading.ref, prev.epochMs);
+    const base = !inherit ? null : writtenDate ? prev.fields : fieldsAt(reading.ref, prev.epochMs);
     const today = base ? addDays(base, dayOffset) : fieldsAt(reading.ref, ctx.now);
     const fields = sourceFields(c, today);
     return fields ? { reading, fields, epochMs: toEpoch(reading.ref, fields) } : null;
@@ -577,7 +587,12 @@ function convertOne(
       const wall = secondsOfDay(first.fields);
       if (wall === secondsOfDay(prev.fields)) return null;
       if (wall < secondsOfDay(prev.fields)) dayOffset = 1;
-    } else if (first.epochMs <= prev.epochMs) dayOffset = 1;
+    } else if (first.epochMs <= prev.epochMs) {
+      // Different labels and the end, on the written date, is not after the
+      // start ("Nov 13, 2026 9 PM PT – 11 PM ET"): adding a day would make a
+      // 23-hour range, more likely a mistake than what was meant.
+      return null;
+    }
   }
 
   let chosen = read(primary);
@@ -623,14 +638,15 @@ function convertOne(
         zoneToken: c.zoneToken,
         dated: ownDate,
         hasDate: c.hasDate,
-        markerDate: ownDate ? null : chosen.fields,
+        // Dated: later ends that took this date are marked against the date as converted.
+        markerDate: ownDate ? fieldsAt(ctx.target, chosen.epochMs) : chosen.fields,
       };
 
   // Already in the reader's zone: nothing to convert.
   if (offsetAt(chosen.reading.ref, chosen.epochMs) === offsetAt(ctx.target, chosen.epochMs)) return { state };
 
   if (!state.hasDate) flags.push('time-only');
-  const markerFor = (r: Reading) => (state.markerDate === null ? null : inherit ? state.markerDate : r.fields);
+  const markerFor = (r: Reading) => (inherit ? state.markerDate : ownDate ? null : r.fields);
   const rendered = render(c, chosen.epochMs, markerFor(chosen), ctx.targetZone);
   const alternatives: Alternative[] = others.map((o) => ({
     description: o.reading.description,

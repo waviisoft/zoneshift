@@ -77,6 +77,16 @@ describe('date and time together', () => {
     expect(convertText(text, { targetZone: zone, now: NOW })).toBe(converted);
   });
 
+  it('reads the date of an event listing across a dot, bullet or colon', () => {
+    expect(la('Thu, Nov 12 · 7:00 PM EST')).toBe('Thu, Nov 12 · 4:00 PM PST');
+    expect(la('Nov 12: 7:00 PM EST')).toBe('Nov 12: 4:00 PM PST');
+    const ny = (text: string) => convertText(text, { targetZone: LA, now: NOW, defaultZone: 'America/New_York' });
+    expect(ny('Nov 13 • 7:00 PM')).toBe('Nov 13 • 4:00 PM PST');
+    expect(ny('Friday · 7:00 PM')).toBe('Friday · 4:00 PM PST');
+    // The date is applied, not today's: 23:30 UTC on Saturday 14 November is Sunday the 15th in Tokyo.
+    expect(to('Asia/Tokyo')('Sat, Nov 14 · 11:30 PM UTC')).toBe('Sun, Nov 15 · 8:30 AM GMT+9');
+  });
+
   it('mirrors the hour padding of the original next to an ISO date', () => {
     expect(la('2026-11-13 1:00 PM UTC')).toBe('2026-11-13 5:00 AM PST');
   });
