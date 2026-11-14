@@ -44,13 +44,21 @@
 - Ranges and lists where only the last end has a zone ("1:30–3:00 PM UTC",
   "between 1:30 PM and 3:00 PM UTC", "1:30 or 3:00 PM UTC", "1:30/3:00 PM UTC",
   "9 till 5 PM ET") are left alone, and so are zone-less ranges under a site
-  default ("7 PM–9 PM").
+  default ("7 PM–9 PM") and ranges with an end the engine does not read as a
+  time ("9 AM ET to noon", "9 PM ET – midnight").
 - Weekday ranges and lists ("Mon–Fri 1 AM UTC", "Sat & Sun",
   "Mon, Wed, Fri at…") are left alone: shifting one named day would mislead.
 - A later end without a date takes the date of the end before it. A range end
   is the first such time after the start, so "Jul 13 11:30 PM UTC – 1:30 AM
   UTC" ends on 14 July; equal ends, ends more than a day apart, and ranges that
-  run backwards are left alone. A list item takes the same date.
+  run backwards are left alone. When the ends have different labels the end
+  must fall after the start on the written date ("Nov 13 9 PM PT – 11 PM ET",
+  which would need a 23-hour range, is left alone). A list item takes the same
+  date; an item with another label ("11 PM PT / 2 AM ET") takes the date the
+  item before falls on in its own zone.
+- A later end that took the date of the end before it and lands on another
+  day in the reader's zone is marked against the date as converted: "Nov 13
+  9 AM UTC and 9 PM UTC" in Tokyo is "6 PM GMT+9 and 6 AM GMT+9 (+1 day)".
 - A date written only after the last end ("1:30 PM UTC – 3:00 PM UTC on
   Friday, Nov 13") belongs to every end, which the engine cannot yet show, so
   the range is left alone.
@@ -72,10 +80,18 @@
   meaning; only the abbreviation (`CST`) gets the alternatives.
 - A time given for several zones at once ("8 PM ET/PT", "8 PM ET/7c") is left alone.
 - Offsets may be written `UTC+2`, `UTC +2`, `GMT + 1`, `UTC −5` (Unicode minus)
-  or `UTC -5`. `UTC - 5`, with a hyphen between spaces, could be a range and is
-  left alone; a UTC/GMT time is never converted while ignoring an offset after
-  it. `UTC-10` followed by a meridiem or another zone ("9 AM UTC-10 AM UTC")
-  is the second end of a range, not an offset.
+  or `UTC -5`, from UTC−12 to UTC+14. `UTC - 5`, with a hyphen between spaces,
+  could be a range and is left alone; a UTC/GMT time is never converted while
+  ignoring an offset after it.
+- A plus sign or Unicode minus after UTC/GMT is always an offset, never a range
+  dash. A hyphen followed by digits and a meridiem ("9 AM UTC-10 AM UTC") is a
+  range dash.
+- An offset followed by a zone label ("14:00 UTC+5:30 IST", "9:00 GMT-10:00
+  HST") is converted once, at the written offset, when the label has that
+  offset at that instant; the label is replaced with the reader's zone. If the
+  label can never have that offset and the sign is a hyphen ("9:00 GMT-10:00
+  GMT"), it is read as a range. Otherwise ("3:00 PM UTC+01:00 PST", or
+  "UTC-04:00 ET" in winter) it is left alone.
 
 **Output**
 
@@ -96,7 +112,8 @@
 
 - Ranges and lists whose ends do not each carry a zone (see above).
 - Numeric dates (`03/04/2026`), two-digit years, all-caps or lower-case month
-  names: a time next to one is left alone.
+  names: a time next to one is left alone. A date joined to its time by `·`,
+  `•` or `:` (event listings: "Thu, Nov 12 · 7:00 PM EST") is read.
 - A date elsewhere in the sentence ("On July 4 the show starts at 6 PM UTC")
   is not linked to the time, which is read as today.
 - Languages other than English.
