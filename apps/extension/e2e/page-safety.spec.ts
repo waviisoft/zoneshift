@@ -411,7 +411,7 @@ test('a cloned slide gets a working icon that follows the page-wide choice', asy
   await expect(page.locator('#copy')).toHaveText('Kick-off 2:30 AM UTC');
   await expect(page.locator('#slide')).toHaveText('Kick-off 2:30 AM UTC');
 });
-test('copying puts the shown text on the clipboard, and pasting into an editor carries no marks', async ({
+test('copying puts only the shown text on the clipboard, and pasting into an editor carries no marks', async ({
   page,
   base,
   context,
@@ -435,8 +435,8 @@ test('copying puts the shown text on the clipboard, and pasting into an editor c
     return out;
   });
   expect(clip['text/plain']).toBe(shown);
-  expect(clip['text/html']).toContain('Thursday, November 12, 2026, at 5:30 PM PST');
-  expect(clip['text/html']).not.toMatch(/zoneshift|data-zs-/);
+  // Plain text only: the browser's HTML would carry Zoneshift's elements.
+  expect(clip['text/html']).toBeUndefined();
   await page.locator('#ed').click();
   await page.keyboard.press('Control+V');
   await expect(page.locator('#ed')).toContainText('5:30 PM PST');
@@ -504,4 +504,190 @@ test('click-to-edit keeps the caret where the reader clicked', async ({ page, ba
     const word = id === 'c1' ? 'Call' : 'Review';
     await expect(page.locator(`#${id}`)).toHaveText(`${word} at 4:30 AM UTC toXday please.`);
   }
+});
+
+pages['/fight'] = {
+  body: html(`${READY}<div id="f"><p>Fight 3:30 AM UTC.</p></div><div id="g"><p>Fight 4:30 AM UTC.</p></div>`),
+};
+test('a site observer that puts an annotated snapshot back does not hang the page, and settles', async ({
+  page,
+  base,
+}) => {
+  await open(page, `${base}/fight`);
+  await page.locator('#f .zoneshift').waitFor();
+  await page.evaluate(() => {
+    const w = window as unknown as { n: number };
+    const f = document.getElementById('f')!;
+    // Taken with the popover open, so it never matches what the annotator makes.
+    (f.querySelector('zoneshift-icon') as HTMLElement).click();
+    const snapshot = f.innerHTML;
+    document.body.click();
+    w.n = 0;
+    new MutationObserver(() => {
+      if (f.innerHTML !== snapshot) {
+        w.n++;
+        f.innerHTML = snapshot;
+      }
+    }).observe(f, { childList: true, subtree: true, attributes: true });
+    f.innerHTML = snapshot;
+  });
+  const count = () => page.evaluate(() => (window as unknown as { n: number }).n);
+  // The page still answers, and the fight stops within a few rounds.
+  const started = Date.now();
+  await count();
+  expect(Date.now() - started).toBeLessThan(1000);
+  await page.waitForTimeout(2000);
+  const settled = await count();
+  expect(settled).toBeLessThanOrEqual(6);
+  await page.waitForTimeout(1500);
+  expect(await count()).toBe(settled);
+});
+test('a site that keeps restoring its own text is left alone after a few rounds', async ({ page, base }) => {
+  await open(page, `${base}/fight`);
+  await page.locator('#g .zoneshift').waitFor();
+  const rewrites = await page.evaluate(async () => {
+    const g = document.getElementById('g')!;
+    const want = 'Fight 4:30 AM UTC.';
+    let n = 0;
+    const t = setInterval(() => {
+      if (g.textContent !== want) {
+        g.innerHTML = '<p>Fight 4:30 AM UTC.</p>';
+        n++;
+      }
+    }, 50);
+    await new Promise((r) => setTimeout(r, 3000));
+    clearInterval(t);
+    return n;
+  });
+  expect(rewrites).toBeLessThanOrEqual(7);
+});
+
+pages['/clip'] = {
+  body: html(
+    `${READY}
+    <div id="a"><h2 id="h">Launch <b>notes</b></h2>
+    <p id="p1">See <a href="/docs/launch">the docs</a> before 1:30 AM UTC.</p>
+    <p id="p2"><span class="nosel">42</span> Deploy 2:30 AM UTC <img src="/logo.png" alt="logo" width="10"></p></div>
+    <table id="t"><tr><td id="c1">Start</td><td>1:30 AM UTC</td></tr><tr><td>End</td><td id="c4">3:30 AM UTC</td></tr></table>
+    <pre id="log">2026-11-13T01:30:00Z INFO  server started
+2026-11-13T01:30:02Z WARN  cache cold
+2026-11-13T01:30:05Z INFO  ready</pre>
+    <p id="nm">No marks here, just <a href="/x">a link</a>.</p>
+    <div id="own"><p id="op">Own handler 4:30 AM UTC</p></div>
+    <div id="sink" contenteditable="true"></div>`,
+    '.nosel { user-select: none; }',
+  ),
+};
+const selectBetween = (page: Page, start: string, end: string) =>
+  page.evaluate(
+    ([s, e]) => {
+      const r = document.createRange();
+      r.setStartBefore(document.querySelector(s)!);
+      r.setEndAfter(document.querySelector(e)!);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(r);
+    },
+    [start, end] as const,
+  );
+async function copied(page: Page): Promise<Record<string, string>> {
+  await page.keyboard.press('Control+C');
+  return page.evaluate(async () => {
+    const out: Record<string, string> = {};
+    for (const item of await navigator.clipboard.read()) {
+      for (const type of item.types) out[type] = await (await item.getType(type)).text();
+    }
+    return out;
+  });
+}
+/** What Chromium itself copies for the same selections, without the extension. */
+async function baseline(base: string, selections: [string, string][]): Promise<Record<string, string>[]> {
+  const context = await chromium.launchPersistentContext('', {
+    channel: 'chromium',
+    executablePath: process.env.ZONESHIFT_CHROMIUM || undefined,
+    timezoneId: 'America/Los_Angeles',
+  });
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+  const page = await context.newPage();
+  await page.goto(`${base}/clip`);
+  const out = [];
+  for (const [s, e] of selections) {
+    await selectBetween(page, s, e);
+    out.push(await copied(page));
+  }
+  await context.close();
+  return out;
+}
+const SELECTIONS: [string, string][] = [
+  ['#h', '#p2'],
+  ['#c1', '#c4'],
+  ['#log', '#log'],
+  ['#nm', '#nm'],
+];
+test('copying times gives the browser’s own plain text, and no HTML; other copies are untouched', async ({
+  page,
+  base,
+  context,
+}) => {
+  const [blocks, table, log, noMarks] = await baseline(base, SELECTIONS);
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+  await open(page, `${base}/clip`);
+  await page.locator('#c4 .zoneshift').waitFor();
+  const results = [];
+  for (const [s, e] of SELECTIONS) {
+    await selectBetween(page, s, e);
+    results.push(await copied(page));
+  }
+  const converted = (text: string) =>
+    text
+      .replace('1:30 AM UTC.', '5:30 PM PST (−1 day).')
+      .replace('2:30 AM UTC', '6:30 PM PST (−1 day)')
+      .replace('Start\t1:30 AM UTC', 'Start\t5:30 PM PST (−1 day)')
+      .replace('3:30 AM UTC', '7:30 PM PST (−1 day)');
+  // Blocks (with a link, an unselectable number and an image's alt text),
+  // a table, and a log left as written: the browser's plain text with the
+  // shown times, and no HTML.
+  expect(results[0]).toEqual({ 'text/plain': converted(blocks!['text/plain']!) });
+  expect(results[0]!['text/plain']).toContain('logo');
+  expect(results[1]).toEqual({ 'text/plain': converted(table!['text/plain']!) });
+  expect(results[2]).toEqual({ 'text/plain': log!['text/plain'] });
+  // Nothing annotated in the selection: exactly what the browser copies.
+  expect(results[3]).toEqual(noMarks);
+  expect(noMarks!['text/html']).toContain('href=');
+});
+test('copied log lines paste as lines, and pasted times carry no marks', async ({ page, base, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+  await open(page, `${base}/clip`);
+  await page.locator('#log .zoneshift').first().waitFor();
+  // Selected inside the log, from its first text to its last, as a reader would.
+  await page.evaluate(() => {
+    const walker = document.createTreeWalker(document.getElementById('log')!, NodeFilter.SHOW_TEXT);
+    const texts: Text[] = [];
+    while (walker.nextNode()) texts.push(walker.currentNode as Text);
+    const last = texts[texts.length - 1]!;
+    getSelection()!.setBaseAndExtent(texts[0]!, 0, last, last.data.length);
+  });
+  await page.keyboard.press('Control+C');
+  await page.locator('#sink').click();
+  await page.keyboard.press('Control+V');
+  await expect(page.locator('#sink')).toHaveText(/server started/);
+  expect((await page.locator('#sink').innerText()).trim().split('\n')).toHaveLength(3);
+  await page.evaluate(() => (document.getElementById('sink')!.innerHTML = ''));
+  await selectBetween(page, '#p1', '#p1');
+  await page.keyboard.press('Control+C');
+  await page.locator('#sink').click();
+  await page.keyboard.press('Control+V');
+  await expect(page.locator('#sink')).toContainText('See the docs before 5:30 PM PST (−1 day).');
+  expect(await page.locator('#sink').innerHTML()).not.toMatch(/zoneshift|data-zs-/);
+});
+test('a site copy handler that stops the event cannot leave marks on the clipboard', async ({
+  page,
+  base,
+  context,
+}) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+  await open(page, `${base}/clip`);
+  await page.locator('#op .zoneshift').waitFor();
+  await page.evaluate(() => document.getElementById('own')!.addEventListener('copy', (e) => e.stopPropagation()));
+  await selectBetween(page, '#op', '#op');
+  expect(await copied(page)).toEqual({ 'text/plain': 'Own handler 8:30 PM PST (−1 day)' });
 });
