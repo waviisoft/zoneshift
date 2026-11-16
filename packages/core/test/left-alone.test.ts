@@ -170,7 +170,7 @@ describe('a weekday that contradicts its date', () => {
 });
 
 describe('an offset the engine does not read', () => {
-  it.each(['14:00 UTC - 5', '14:00 GMT  +  1', 'Lunch 12:00 UTC-13:00 daily'])('%s', (text) => {
+  it.each(['14:00 UTC - 5', '14:00 GMT  +  1'])('%s', (text) => {
     expect(la(text)).toBe(text);
   });
 
@@ -182,6 +182,11 @@ describe('an offset the engine does not read', () => {
   it('still converts a hyphenated range of zoned times, as one conversion', () => {
     expect(la('1 PM UTC - 3 PM UTC')).toBe('5 AM PST - 7 AM PST');
     expect(findConversions('1 PM UTC - 3 PM UTC', { targetZone: LA, now: NOW })).toHaveLength(1);
+  });
+
+  it('reads "UTC-13:00" as a range to 13:00, since −13 is outside the offsets it reads (Decision log, 2026-11-16)', () => {
+    expect(la('Lunch 12:00 UTC-13:00 daily')).toBe('Lunch 04:00 PST-05:00 daily');
+    expect(findConversions('Lunch 12:00 UTC-13:00 daily', { targetZone: LA, now: NOW })).toHaveLength(1);
   });
 });
 

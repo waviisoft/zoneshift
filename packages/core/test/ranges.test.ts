@@ -246,6 +246,8 @@ describe('B6 how each end is written', () => {
     ['1:30–3:00 PM UTC', '5:30–7:00 AM PST'],
     ['1:30-3:00 PM UTC', '5:30-7:00 AM PST'],
     ['1:30—3:00 PM UTC', '5:30—7:00 AM PST'],
+    // A Unicode minus is a range dash too: both ends convert (Decision log, 2026-11-16).
+    ['1:30−3:00 PM UTC', '5:30−7:00 AM PST'],
     ['1:30 – 3:00 PM UTC', '5:30 – 7:00 AM PST'],
     ['1:30  -  3:00 PM UTC', '5:30  -  7:00 AM PST'],
     ['1:30 to 3:00 PM UTC', '5:30 to 7:00 AM PST'],
