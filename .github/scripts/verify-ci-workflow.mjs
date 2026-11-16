@@ -25,7 +25,10 @@ export function verifyWorkflow(yaml) {
   const lines = yaml.split('\n');
 
   // --- 1. every `uses:` is pinned to a 40-char commit SHA, with a version comment.
-  const usesLineRe = /^\s*-\s*uses:\s*(\S+)(?:\s+#\s*(.+))?\s*$/;
+  // Matches both the single-line step form (`- uses: pkg@sha # vX`) and the
+  // two-line form where `uses:` is its own key under a preceding `- name:` (or
+  // any other key) line at the same indentation (`  uses: pkg@sha # vX`).
+  const usesLineRe = /^\s*(?:-\s*)?uses:\s*(\S+)(?:\s+#\s*(.+))?\s*$/;
   lines.forEach((line, i) => {
     const match = line.match(usesLineRe);
     if (!match) return;

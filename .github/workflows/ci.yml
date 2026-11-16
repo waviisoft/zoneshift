@@ -31,6 +31,8 @@ jobs:
           cache: pnpm
       - name: Verify CI workflow hardening
         run: node .github/scripts/verify-ci-workflow.mjs
+      - name: Verify CI workflow hardening - unit tests
+        run: node --test .github/scripts/verify-ci-workflow.test.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       # packages/core is explicitly timezone-sensitive (pure TS time-zone
