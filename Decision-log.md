@@ -31,6 +31,19 @@ Decisions about Zoneshift, newest first within each section. A spec page holds t
 |---|---|---|
 | 2026-11-13 | Conversions are written into the page's text in place for the first slice, with a known limitation. Showing them without changing the page's own text must be specified and built before any store release. | A site that reads its own page (an editor that builds itself from the page's HTML, or a click-to-edit field filled from the visible text) can save the converted time into its data; no signal arrives in time to put the original back. Reproduced in the review of [#26](https://github.com/waviisoft/zoneshift/pull/26). Accepted for now because nothing is published. Tracked in [#34](https://github.com/waviisoft/zoneshift/issues/34), which blocks [#25](https://github.com/waviisoft/zoneshift/issues/25). |
 
+## Time ranges (Owner, 2026-11-16)
+
+Full detail: [Time ranges](Spec:-Time-ranges). All seven decisions approved together, as recommended.
+
+| Decision | Choice |
+|---|---|
+| v1 scope | The narrow set of separators and shapes in the spec; deferred shapes (`thru`, `till`, `between X and Y`, mixed 12/24-hour, …) go to a follow-up issue |
+| Zone on the first end only (`9:00 AM UTC to 5:00 PM`) | Build it, with the L8 guard against a label of its own on the end |
+| Same-label zoned ranges (`11 PM UTC – 1 AM UTC`) | Become one unit with one icon; different-label ranges stay per end as #26 built them |
+| Overnight inference (`10 PM – 2 AM`, no dates) | Roll to the next day only if the range is then ≤ 12 h; revisit if feedback says the cap is wrong |
+| Day marker on time-only ranges | One marker, for the start's day |
+| Icons | One per range |
+
 ## Engine (Build)
 
 Full detail: [Conversion rules](Spec:-Conversion-rules). Also written down in `docs/design.md` and tested in `packages/core/test`. Decided in the first slice and its review ([#26](https://github.com/waviisoft/zoneshift/pull/26)).
@@ -72,6 +85,6 @@ Full detail: [Page annotation](Spec:-Page-annotation).
 
 ## Open, waiting on the owner
 
-- The decisions listed at the top of each Draft spec: [Alternative readings](Spec:-Alternative-readings), [Time elements](Spec:-Time-elements), [Time ranges](Spec:-Time-ranges), [Settings](Spec:-Settings).
+- The decisions listed at the top of each Draft spec: [Alternative readings](Spec:-Alternative-readings), [Time elements](Spec:-Time-elements), [Settings](Spec:-Settings). [Time ranges](Spec:-Time-ranges) is Approved as of 2026-11-16.
 - Icon colour when a reading was chosen: the two specs recommend differently (blue after a pick on the page; orange for a remembered preference).
 - Whether the Build decisions above stand.
