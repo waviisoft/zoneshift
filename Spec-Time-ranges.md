@@ -1,4 +1,4 @@
-> Status: **Draft — awaiting owner approval** · Issue: [#11](https://github.com/waviisoft/zoneshift/issues/11) · Depends on: nothing
+> Status: **Approved — 2026-11-16** · Issue: [#11](https://github.com/waviisoft/zoneshift/issues/11) · Depends on: nothing
 
 ## Summary
 
@@ -8,7 +8,9 @@ What #26 already does: a range or list converts only when every end carries its 
 
 ## Decisions for the owner
 
-1. **v1 scope.** Options: the narrow set below, or include the deferred shapes too. **Recommended: narrow.** It covers every example in #11 with the fewest patterns. Deferred shapes are left alone whole (L1) and go to a follow-up issue. The table applies to shared-zone ranges; when each end has its own zone, #26 already accepts `through`, `thru`, `till`, `til`, `~` and `between X and Y`.
+All decided 2026-11-16 as recommended, below.
+
+1. **v1 scope.** Options: the narrow set below, or include the deferred shapes too. **Recommended: narrow.** Decided: narrow. It covers every example in #11 with the fewest patterns. Deferred shapes are left alone whole (L1) and go to a follow-up issue. The table applies to shared-zone ranges; when each end has its own zone, #26 already accepts `through`, `thru`, `till`, `til`, `~` and `between X and Y`.
 
    | In v1 | Deferred (left alone) |
    |---|---|
@@ -17,12 +19,12 @@ What #26 already does: a range or list converts only when every end carries its 
    | Zone after the end; same label on both ends (decision 3); zone on the first end only (decision 2) | Different labels as one unit (decision 3); lists sharing a zone (decision 4) |
    | Date or weekday before the start, or before each end | Date after the range or before the end only; ISO timestamps |
 
-2. **Zone on the first end only** (`9:00 AM UTC to 5:00 PM`). Options: v1 with the L8 guard, or defer. **Recommended: v1 with the guard.** It is one of the issue's three examples.
-3. **Zone on each end.** Partly built in #26: every end with its own zone converts end by end, one icon each; with different labels the end must fall after the start on the written date, else the whole range is left alone; `11 PM UTC – 1 AM UTC` already gives `3 PM PST – 5 PM PST` (the first draft's wrong `(−1 day)` is gone). **Still open:** should an already-built range whose ends carry the **same** label become one unit with one icon (B1, B6–B8, B10)? Options: (a) yes, same label → one unit; different labels stay per end as built; (b) keep #26's per-end conversion, so only shared-zone ranges are one unit; (c) one unit for different labels too. **Recommended: (a).** Half a range can then never show converted, the reader gets one day marker (decision 6) and one model whichever way the zone is written. Different labels are rare and often an equivalence (`1 PM UTC to 5 AM PST`, left alone in #26). Cost: zoned outputs change (see Acceptance tests); for example `Jan 1, 2027 7 AM UTC – 9 AM UTC` shows `Dec 31, 2026 11 PM PST – 1 AM PST (+1 day)` today, and B6 would write the end's date instead.
+2. **Zone on the first end only** (`9:00 AM UTC to 5:00 PM`). Options: v1 with the L8 guard, or defer. **Recommended: v1 with the guard.** Decided: v1 with the guard. It is one of the issue's three examples.
+3. **Zone on each end.** Partly built in #26: every end with its own zone converts end by end, one icon each; with different labels the end must fall after the start on the written date, else the whole range is left alone; `11 PM UTC – 1 AM UTC` already gives `3 PM PST – 5 PM PST` (the first draft's wrong `(−1 day)` is gone). **Still open:** should an already-built range whose ends carry the **same** label become one unit with one icon (B1, B6–B8, B10)? Options: (a) yes, same label → one unit; different labels stay per end as built; (b) keep #26's per-end conversion, so only shared-zone ranges are one unit; (c) one unit for different labels too. **Recommended: (a).** Decided: (a). Half a range can then never show converted, the reader gets one day marker (decision 6) and one model whichever way the zone is written. Different labels are rare and often an equivalence (`1 PM UTC to 5 AM PST`, left alone in #26). Cost: zoned outputs change (see Acceptance tests); for example `Jan 1, 2027 7 AM UTC – 9 AM UTC` shows `Dec 31, 2026 11 PM PST – 1 AM PST (+1 day)` today, and B6 would write the end's date instead.
 4. **Lists sharing a trailing zone** (`9 AM, 1 PM and 5 PM UTC`). **Already built in #26:** the whole list is left alone; lists where every item has its own zone convert item by item.
-5. **Overnight inference** (end earlier on the clock, no dates). Options: next day if the range is then ≤ 12 h, always, or never. **Recommended: ≤ 12 h.** This keeps `10 PM – 2 AM` and night shifts, and rejects `3 PM to 1 PM UTC` (usually "moved from"). Note: #26 lets a zoned range run up to 24 h, so `3 PM UTC to 1 PM UTC` converts today as `7 AM PST to 5 AM PST (+1 day)`; under decision 3 (a) same-label zoned ranges would take this cap.
-6. **Day marker on time-only ranges.** Options: (a) one marker for the start's day, after the whole range, or after the start when the converted range crosses midnight; (b) one per end; (c) always after the whole range. **Recommended: (a).** It can't be read as applying to the end alone. #26 does (b) for zoned ranges: `1:30 AM UTC – 3:00 AM UTC` → `5:30 PM PST (−1 day) – 7:00 PM PST (−1 day)`.
-7. **Icons.** Options: one per range, or one per end. **Recommended: one.** Half a range can then never show converted. Today zoned ranges have one icon per end, and **Show original here** switches one end only; decision 3 (a) brings them to one.
+5. **Overnight inference** (end earlier on the clock, no dates). Options: next day if the range is then ≤ 12 h, always, or never. **Recommended: ≤ 12 h.** Decided: ≤ 12 h, to revisit if feedback says otherwise. This keeps `10 PM – 2 AM` and night shifts, and rejects `3 PM to 1 PM UTC` (usually "moved from"). Note: #26 lets a zoned range run up to 24 h, so `3 PM UTC to 1 PM UTC` converts today as `7 AM PST to 5 AM PST (+1 day)`; under decision 3 (a) same-label zoned ranges would take this cap.
+6. **Day marker on time-only ranges.** Options: (a) one marker for the start's day, after the whole range, or after the start when the converted range crosses midnight; (b) one per end; (c) always after the whole range. **Recommended: (a).** Decided: (a). It can't be read as applying to the end alone. #26 does (b) for zoned ranges: `1:30 AM UTC – 3:00 AM UTC` → `5:30 PM PST (−1 day) – 7:00 PM PST (−1 day)`.
+7. **Icons.** Options: one per range, or one per end. **Recommended: one.** Decided: one. Half a range can then never show converted. Today zoned ranges have one icon per end, and **Show original here** switches one end only; decision 3 (a) brings them to one.
 
 No new permissions or network access.
 
@@ -153,4 +155,5 @@ End-to-end:
 
 ## Revision history
 
+- 2026-11-16: Owner approved all seven decisions as recommended. Status set to Approved.
 - 2026-11-13: Reconciled with #26 (commit 84d9d93): decision 4, B9, L6, L7 and L13 marked as already built; decision 3 narrowed to the open question for same-label zoned ranges; today's outputs re-run through the current engine (two examples already convert; L5 and L7 corrected; `noon UTC – 3 PM UTC` half-conversion added to L1); notes on #26's 24 h cap and per-end markers; existing tests that flip updated.
