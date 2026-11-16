@@ -111,3 +111,36 @@ test('content added later follows the page-wide choice', async ({ page }) => {
   });
   await expect(page.locator('#late')).toHaveText('Added later: 2026-11-13T01:00:00-08:00');
 });
+
+test('converts a time range as one unit with one icon, toggles it back exactly, and leaves a shared-zone list alone', async ({
+  page,
+}) => {
+  // The range has no date, so it is read on today's date: Pacific daylight or standard time.
+  const start = new Date();
+  start.setUTCHours(13, 30, 0, 0);
+  const pdt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', timeZoneName: 'short' })
+    .format(start)
+    .endsWith('PDT');
+  const converted = pdt ? 'Call between 6:30–8:00 AM PDT today.' : 'Call between 5:30–7:00 AM PST today.';
+  const original = 'Call between 1:30–3:00 PM UTC today.';
+  const range = page.locator('#range');
+  const text = () => range.evaluate((e) => e.textContent);
+
+  await expect(range.locator('.zoneshift-icon')).toHaveCount(1);
+  expect(await text()).toBe(converted);
+
+  await range.locator('.zoneshift-icon').click();
+  const dialog = page.getByRole('dialog', { name: 'Zoneshift' });
+  await expect(dialog).toContainText('1:30–3:00 PM UTC');
+  await dialog.getByRole('button', { name: 'Show original here' }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(await text()).toBe(original);
+  await expect(range.locator('.zoneshift-icon')).toHaveCount(1);
+
+  await range.locator('.zoneshift-icon').click();
+  await page.getByRole('button', { name: 'Convert to local time' }).click();
+  expect(await text()).toBe(converted);
+
+  await expect(page.locator('#list .zoneshift')).toHaveCount(0);
+  expect(await page.locator('#list').evaluate((e) => e.innerHTML)).toBe('Slots at 9 AM, 1 PM and 5 PM UTC.');
+});
