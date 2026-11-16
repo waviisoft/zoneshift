@@ -10,24 +10,51 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel a stale run when more commits land on the same PR branch, but never
+  # cancel an in-progress run on main: two pushes to main in quick succession
+  # should both finish, not race each other out.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
     name: Typecheck, unit tests, build
     runs-on: ubuntu-latest
+    # Typecheck + three TZ passes of the unit suite + build; each is well under a
+    # minute locally, so this gives generous headroom without being meaningless.
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
+      - name: Verify CI workflow hardening
+        run: node .github/scripts/verify-ci-workflow.mjs
+      - name: Verify CI workflow hardening - unit tests
+        run: node --test .github/scripts/verify-ci-workflow.test.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
-      - run: pnpm test
+      # packages/core is explicitly timezone-sensitive (pure TS time-zone
+      # conversion logic), so the unit suite must stay host-TZ independent.
+      # Run it under a spread of zones: UTC itself, a half-hour-offset zone on
+      # the opposite side of UTC from the others (Asia/Kolkata, UTC+5:30), and
+      # a quarter-hour-offset zone at the extreme positive edge, past the
+      # international date line (Pacific/Chatham, UTC+13:45).
+      - name: Unit tests (TZ=UTC)
+        run: pnpm test
+        env:
+          TZ: UTC
+      - name: Unit tests (TZ=Asia/Kolkata)
+        run: pnpm test
+        env:
+          TZ: Asia/Kolkata
+      - name: Unit tests (TZ=Pacific/Chatham)
+        run: pnpm test
+        env:
+          TZ: Pacific/Chatham
       - run: pnpm build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: extension-builds
           path: |
@@ -38,10 +65,13 @@ jobs:
   e2e:
     name: End-to-end (Chromium)
     runs-on: ubuntu-latest
+    # Installing Chromium + its OS deps dominates this job; give it room on a
+    # slow or cold-cache runner without letting a genuine hang run forever.
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -49,7 +79,7 @@ jobs:
       - run: pnpm --filter @zoneshift/extension exec playwright install --with-deps chromium
       - run: pnpm --filter @zoneshift/extension build:chrome
       - run: pnpm --filter @zoneshift/extension e2e
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: playwright-traces
