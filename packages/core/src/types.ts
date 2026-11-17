@@ -28,8 +28,10 @@ export interface Conversion {
   original: string;
   /** Replacement text, mirroring the original's format. */
   converted: string;
-  /** The instant the text was read as. */
+  /** The instant the text was read as; for a range, its start. */
   epochMs: number;
+  /** For a range converted as one unit ("1:30–3:00 PM UTC"): the instant of its end. */
+  endEpochMs?: number;
   /** How the source zone was read, e.g. "UTC" or "Eastern Time (America/New_York)". */
   sourceDescription: string;
   confidence: 'high' | 'low';
@@ -41,11 +43,12 @@ export interface Conversion {
   /**
    * For time-only text: target date minus source date, in days. Usually -1, 0
    * or 1; zones more than 24 hours apart (Pacific/Kiritimati and
-   * Pacific/Pago_Pago are 25) can give -2 or 2. For the later end of a
-   * time-only range or list, measured from the source date of the first end.
-   * Otherwise 0 when the text has a date or weekday, except for a later end
-   * that took its date from the end before it: then the days between the
-   * first end's converted date and this end's.
+   * Pacific/Pago_Pago are 25) can give -2 or 2. A range converted as one
+   * unit has the start's. For the later end of a time-only list, or of a
+   * range whose ends have different labels, measured from the source date of
+   * the first end. Otherwise 0 when the text has a date or weekday, except
+   * for a later end that took its date from the end before it: then the days
+   * between the first end's converted date and this end's.
    */
   dayShift: number;
 }

@@ -1,7 +1,7 @@
 import { findConversions, type Conversion, type ConvertOptions } from '@zoneshift/core';
 
 /**
- * Page annotator. Every recognised time gets a clock icon after it:
+ * Page annotator. Every recognised time or range gets one clock icon after it:
  *  - prose times are converted straight away (solid icon);
  *  - timestamps in code/log blocks and ISO 8601 timestamps are left as
  *    written (hollow icon) until the reader asks for them.
