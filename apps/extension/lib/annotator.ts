@@ -360,7 +360,15 @@ export function createAnnotator(doc: Document, options: ConvertOptions = {}): An
         // Extended leftwards: only a date or weekday, read as the same clock
         // time on another day and shown as the same local time. A range or
         // list start, or a daylight-saving change between the days, fails.
-        return (w.epochMs - c.epochMs) % DAY === 0 && w.converted.endsWith(withoutDayShift(c.converted));
+        // A range's epochMs is only its start, so a range must stay a range
+        // with its end moved by the same days: otherwise a range start was
+        // added ("Nov 12, 9 AM UTC –" + "Nov 14, 9 AM UTC"), not a date.
+        const days = w.epochMs - c.epochMs;
+        const sameKind =
+          w.endEpochMs === undefined
+            ? c.endEpochMs === undefined
+            : c.endEpochMs !== undefined && w.endEpochMs - c.endEpochMs === days;
+        return days % DAY === 0 && sameKind && w.converted.endsWith(withoutDayShift(c.converted));
       });
     });
   }

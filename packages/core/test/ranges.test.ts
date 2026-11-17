@@ -382,6 +382,13 @@ describe('Edge cases', () => {
     expect(la('Nov 1, 2026 8:00–10:00 AM UTC')).toBe('Nov 1, 2026 1:00 AM PDT–2:00 AM PST');
   });
 
+  it('daylight saving changes in the target zone inside a range with the zone on the first end only: the end gets its own', () => {
+    expect(la('Nov 1, 2026 1:00 AM UTC to 10:00 AM')).toBe('Oct 31, 2026 6:00 PM PDT to Nov 1, 2026 2:00 AM PST');
+    expect(la('Nov 1, 2026 8:00 AM UTC to 10:00 AM')).toBe('Nov 1, 2026 1:00 AM PDT to 2:00 AM PST');
+    expect(la('Mar 8, 2026 9:00 AM UTC to 11:00 AM')).toBe('Mar 8, 2026 1:00 AM PST to 4:00 AM PDT');
+    expect(la('Nov 1, 2026 08:00 (UTC) to 10:00')).toBe('Nov 1, 2026 01:00 (PDT) to 02:00 (PST)');
+  });
+
   it('season-mismatch verdicts differ between the ends: left alone (B8)', () => {
     leftAlone('Nov 1, 2026 12:30–3:00 AM EST', 'UTC');
   });

@@ -875,7 +875,14 @@ function renderRange(
     } else if (merDiffers) startExtra = merText;
   }
   const start = renderSpan(a, a.start, a.end, r.epochMs, tz, twelve, startExtra);
-  const endZone = unit === 'default' ? ` ${shortZoneName(tz, r.endEpochMs)}` : '';
+  // The zone written on the start only, repeated on the end when it differs there.
+  let endZone = unit === 'default' ? ` ${shortZoneName(tz, r.endEpochMs)}` : '';
+  if (unit === 'first' && shortZoneName(tz, r.epochMs) !== shortZoneName(tz, r.endEpochMs)) {
+    const zone = (partOf(a, 'zone') ?? partOf(a, 'isoz'))!;
+    const from = partOf(a, 'mer')?.end ?? [...a.parts].reverse().find((p) => ['hour', 'minute', 'second'].includes(p.type))!.end;
+    const paren = a.text[zone.end] === ')' && a.text.slice(from, zone.start).includes('(') ? 1 : 0;
+    endZone = renderSpan(a, from, zone.end + paren, r.endEpochMs, tz, true);
+  }
   const end = renderSpan(b, b.start, b.end, r.endEpochMs, tz, partOf(b, 'mer') !== undefined, endZone);
 
   // A date written on the start only is written on the end too when the ends land on different dates.

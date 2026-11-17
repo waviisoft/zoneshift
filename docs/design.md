@@ -122,8 +122,9 @@
   the separator is kept exactly. What is written once is written on both ends
   only when it no longer fits both: the start gets its own meridiem when the
   ends land in different meridiems ("9:30 PM–12:00 AM GMT+9"), its own label
-  when the zone's name differs at the two ends ("1:00 AM PDT–2:00 AM PST"),
-  and the end gets its own date, in the start's format, when the ends land on
+  when the zone's name differs at the two ends ("1:00 AM PDT–2:00 AM PST"; a
+  label written on the start only is written on the end too: "1:00 AM PDT to
+  2:00 AM PST"), and the end gets its own date, in the start's format, when the ends land on
   different dates ("Nov 11, 11 PM–Nov 12, 1 AM PST"). Under a site default the
   zone name is added once, after the end.
 - A time-only range has one day marker, for the start's day: after the whole

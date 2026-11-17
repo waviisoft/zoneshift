@@ -109,6 +109,10 @@ describe('marking', () => {
     // L13 (time ranges): a range whose start sits in a neighbouring element.
     '<p><b>9 AM</b> – 5 PM UTC</p>',
     '<p><span>1</span>-3 PM UTC</p>',
+    // Ends a whole number of days apart at the same clock time: not a date added on the left.
+    '<p><span>Nov 12, 9:00 AM UTC</span> – <span>Nov 14, 9:00 AM UTC</span></p>',
+    '<p><span>Nov 12, 9:00 AM</span> – <span>Nov 14, 9:00 AM UTC</span></p>',
+    '<p>Nov 12, 9:00 AM – <i>Nov 14, 9:00 AM UTC</i></p>',
     '<p>Built 2026-11-13T<b>01:30:00Z</b></p>',
   ])('leaves %s alone', (html) => {
     load(html);
