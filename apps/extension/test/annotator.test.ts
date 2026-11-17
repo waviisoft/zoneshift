@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { findConversions } from '@zoneshift/core';
 import {
   BACKOFF_START,
   createAnnotator,
@@ -105,6 +106,13 @@ describe('marking', () => {
     // A time that continues into the next element: reading it alone would be wrong.
     '<p>Call at <b>10:00 AM UTC</b>+2 tomorrow</p>',
     '<p>From 1:30<b>–3:00 PM UTC</b></p>',
+    // L13 (time ranges): a range whose start sits in a neighbouring element.
+    '<p><b>9 AM</b> – 5 PM UTC</p>',
+    '<p><span>1</span>-3 PM UTC</p>',
+    // Ends a whole number of days apart at the same clock time: not a date added on the left.
+    '<p><span>Nov 12, 9:00 AM UTC</span> – <span>Nov 14, 9:00 AM UTC</span></p>',
+    '<p><span>Nov 12, 9:00 AM</span> – <span>Nov 14, 9:00 AM UTC</span></p>',
+    '<p>Nov 12, 9:00 AM – <i>Nov 14, 9:00 AM UTC</i></p>',
     '<p>Built 2026-11-13T<b>01:30:00Z</b></p>',
   ])('leaves %s alone', (html) => {
     load(html);
@@ -409,6 +417,102 @@ describe('popover', () => {
     expect(document.querySelectorAll(`#${POPOVER_ID}`)).toHaveLength(1);
     annotator.annotate(document.documentElement);
     expect(marks()).toHaveLength(2);
+  });
+});
+
+describe('time ranges', () => {
+  const click = (el: HTMLElement) =>
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+  const details = () => [...popover()!.shadowRoot!.querySelectorAll('dd')].map((d) => d.textContent);
+  const RANGE = '<p id="p">Call between 1:30–3:00 PM UTC today.</p>';
+
+  it('B10: converts a range as one unit, with one icon after the end', () => {
+    load(RANGE);
+    expect(marks()).toHaveLength(1);
+    expect(document.querySelectorAll('.zoneshift-icon')).toHaveLength(1);
+    expect(document.body.textContent).toBe('Call between 5:30–7:00 AM PST today.');
+    const [mark] = marks();
+    expect(shown()).toEqual(['converted: 5:30–7:00 AM PST']);
+    expect(mark!.getAttribute('data-zs-original')).toBe('1:30–3:00 PM UTC');
+    expect(mark!.lastElementChild).toBe(icon(mark!));
+    expect(mark!.nextSibling!.textContent).toBe(' today.');
+  });
+
+  it('B10, decision 3: a range with the same zone on each end gets one icon, and switches whole', () => {
+    load('<p>Call 1:30 PM UTC – 3:00 PM UTC today.</p>');
+    expect(marks()).toHaveLength(1);
+    expect(document.querySelectorAll('.zoneshift-icon')).toHaveLength(1);
+    expect(shown()).toEqual(['converted: 5:30 AM PST – 7:00 AM PST']);
+    annotator.setState(marks()[0]!, 'original');
+    expect(document.body.textContent).toBe('Call 1:30 PM UTC – 3:00 PM UTC today.');
+  });
+
+  it('B10: the popover shows the whole original, the whole local range and how it was read', () => {
+    load(RANGE);
+    expect(marks()).toHaveLength(1);
+    click(icon(marks()[0]!));
+    const [single] = findConversions('1:30 PM UTC', OPTIONS);
+    expect(details()).toEqual(['1:30–3:00 PM UTC', '5:30–7:00 AM PST', single!.sourceDescription]);
+  });
+
+  it('B10: Show original here restores the whole range exactly, and converts it back', () => {
+    load(RANGE);
+    expect(marks()).toHaveLength(1);
+    const p = document.getElementById('p')!;
+    click(icon(marks()[0]!));
+    popoverButton('Show original here').click();
+    expect(p.textContent).toBe('Call between 1:30–3:00 PM UTC today.');
+    expect(shown()).toEqual(['original: 1:30–3:00 PM UTC']);
+    expect(icon(marks()[0]!).getAttribute('aria-label')).toBe('Local time: 5:30–7:00 AM PST');
+    click(icon(marks()[0]!));
+    popoverButton('Convert to local time').click();
+    expect(p.textContent).toBe('Call between 5:30–7:00 AM PST today.');
+    expect(icon(marks()[0]!).getAttribute('aria-label')).toBe('Converted to local time. Original: 1:30–3:00 PM UTC');
+  });
+
+  it('B10: the page-wide switches act on the whole range and restore it exactly', () => {
+    load(`${RANGE}<p>At 1:30 AM UTC.</p>`);
+    expect(marks()).toHaveLength(2);
+    click(icon(marks()[0]!));
+    popoverButton('Show all originals on this page').click();
+    expect(document.body.textContent).toBe('Call between 1:30–3:00 PM UTC today.At 1:30 AM UTC.');
+    click(icon(marks()[1]!));
+    popoverButton('Convert all times on this page').click();
+    expect(document.body.textContent).toBe('Call between 5:30–7:00 AM PST today.At 5:30 PM PST (−1 day).');
+  });
+
+  it('B10: stopping puts the page’s own text node back', () => {
+    document.body.innerHTML = '<p id="p"></p>';
+    const text = document.createTextNode('Call between 1:30–3:00 PM UTC today.');
+    document.getElementById('p')!.append(text);
+    annotator = createAnnotator(document, OPTIONS);
+    stop = annotator.start();
+    expect(marks()).toHaveLength(1);
+    stop();
+    stop = undefined;
+    expect(document.getElementById('p')!.innerHTML).toBe('Call between 1:30–3:00 PM UTC today.');
+    expect(document.getElementById('p')!.firstChild).toBe(text);
+  });
+
+  it('B8, B10: an ambiguous range gets one low-confidence icon', () => {
+    load('<p>Nov 20, 2026 9–11 AM CST</p>');
+    expect(marks()).toHaveLength(1);
+    expect(marks()[0]!.dataset.zsConfidence).toBe('low');
+    expect(shown()).toEqual(['converted: Nov 20, 2026 7–9 AM PST']);
+  });
+
+  it.each([
+    ['code', '2-3 PM UTC', '6-7 AM PST'],
+    ['pre', '13:00–14:00 UTC', '05:00–06:00 PST'],
+    ['samp', '1:30–3:00 PM UTC', '5:30–7:00 AM PST'],
+    ['kbd', '10 PM – 2 AM UTC', '2 PM – 6 PM PST'],
+  ])('L14, B10: a range in <%s> gets one hollow icon and converts only on request', (tag, original, converted) => {
+    load(`<${tag}>${original}</${tag}>`);
+    expect(shown()).toEqual([`original: ${original}`]);
+    expect(document.body.textContent).toBe(original);
+    click(icon(marks()[0]!));
+    popoverButton('Convert to local time').click();
+    expect(shown()).toEqual([`converted: ${converted}`]);
   });
 });
 

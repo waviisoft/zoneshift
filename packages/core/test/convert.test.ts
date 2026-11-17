@@ -189,11 +189,25 @@ describe('zone-less times', () => {
   });
 });
 
+describe('ranges', () => {
+  // Left alone before the time-ranges spec (#11); now each is one conversion.
+  it.each([
+    ['Call between 1:30–3:00 PM UTC', 'Call between 5:30–7:00 AM PST'],
+    ['Open 1-3 PM UTC', 'Open 5-7 AM PST'],
+    ['Open 9:00 AM UTC to 5:00 PM', 'Open 1:00 AM PST to 9:00 AM'],
+  ])('converts %s as one range', (text, converted) => {
+    expect(la(text)).toBe(converted);
+    expect(findConversions(text, { targetZone: LA, now: NOW })).toHaveLength(1);
+  });
+
+  it('converts a range whose ends each carry the same zone as one conversion', () => {
+    expect(la('1:30 PM UTC – 3:00 PM UTC')).toBe('5:30 AM PST – 7:00 AM PST');
+    expect(findConversions('1:30 PM UTC – 3:00 PM UTC', { targetZone: LA, now: NOW })).toHaveLength(1);
+  });
+});
+
 describe('things left alone', () => {
   it.each([
-    'Call between 1:30–3:00 PM UTC',
-    'Open 1-3 PM UTC',
-    'Open 9:00 AM UTC to 5:00 PM',
     'Score was 10:30-11:30 in the end',
     'Version 5 UTC',
     'November 13, 2026',
@@ -202,10 +216,6 @@ describe('things left alone', () => {
     'a 5 PM ESTimate',
   ])('%s', (text) => {
     expect(la(text)).toBe(text);
-  });
-
-  it('converts both ends of a range when each has a zone', () => {
-    expect(la('1:30 PM UTC – 3:00 PM UTC')).toBe('5:30 AM PST – 7:00 AM PST');
   });
 });
 

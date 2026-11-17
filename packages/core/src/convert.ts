@@ -22,14 +22,19 @@ const WD_OPT = `(?:(?<wd>${WD})\\.?,?\\s+)?`;
 const LEFT_JOIN = '(?:,?\\s+(?:at\\s+|@\\s*)?|\\s*[-–—|]\\s+|\\s*[·•]\\s*|:\\s+)';
 const RIGHT_JOIN = '^(?:,?\\s+(?:on\\s+)?|\\s*[-–—|]\\s+)';
 
-/** A time, optionally followed by a zone. Every candidate conversion starts here. */
-const anchorSource = (zone: string) =>
+/**
+ * A time, optionally followed by a zone. Every candidate conversion starts
+ * here. Meridiem letters followed by a digit ("PM2.5") are not a meridiem.
+ */
+const anchorSource = (zone: string, isoOffset = true) =>
   `(?<![\\d:.])(?<hour>\\d{1,2})(?!\\d)(?::(?<minute>\\d{2})(?!\\d)(?::(?<second>\\d{2})(?:[.,]\\d{1,9})?)?)?` +
-  `(?:\\s?(?<mer>${MER})(?![A-Za-z]))?` +
-  `(?:(?<isoz>Z|[+\\-−]\\d{2}(?::?\\d{2})?)(?![\\dA-Za-z:])|\\s?\\(?(?<zone>${zone})(?![A-Za-z]))?`;
+  `(?:\\s?(?<mer>${MER})(?![A-Za-z\\d]))?` +
+  `(?:${isoOffset ? '(?<isoz>Z|[+\\-−]\\d{2}(?::?\\d{2})?)(?![\\dA-Za-z:])|' : ''}\\s?\\(?(?<zone>${zone})(?![A-Za-z]))?`;
 const ANCHOR = anchorSource(ZONE_PATTERN);
 /** The same, reading "GMT-10:00 GMT" as "GMT" followed by a range dash. */
 const ANCHOR_NO_OFFSET = anchorSource(ZONE_PATTERN_NO_OFFSET);
+/** The same without a glued numeric offset: "10:30-11:30" outside an ISO timestamp. */
+const ANCHOR_NO_ISO = anchorSource(ZONE_PATTERN, false);
 
 /** Date forms that may sit directly before the time. */
 const LEFT_DATES = [
@@ -48,9 +53,28 @@ const RIGHT_DATES = [
 
 /**
  * Words and marks that join the ends of a range ("1–3 PM", "9 till 5"). A plus
- * sign or Unicode minus is never a range dash: after UTC/GMT it is an offset.
+ * sign is never a range dash: after UTC/GMT it is an offset. A Unicode minus
+ * is one when a time follows it ("2 PM UTC −3 PM UTC"); "UTC −5" is an offset.
  */
-const RANGE_WORD = '(?:[-–—~]|to|until|till|til|through|thru)';
+const RANGE_WORD = '(?:[-–—−~]|to|until|till|til|through|thru)';
+/**
+ * The separators of a range whose ends share a zone, meridiem or date
+ * ("1:30–3:00 PM UTC", "9:00 AM UTC to 5:00 PM"). Ranges whose ends each
+ * carry a zone may also use the other range words.
+ */
+const SHARED_GAP = /^\s*(?:[-–—−]|to|until)\s*$/;
+/** After a time with no minutes or meridiem: it can only be the start of such a range ("1-3 PM"). */
+const HOUR_START = /^\s*(?:[-–—−]|to\s|until\s)\s*\d/;
+/** Before a number: a month name, so the number is a day ("Nov 12–14"). */
+const MONTH_BEFORE = new RegExp(`(?<![A-Za-z])${MON}\\.?\\s*$`, 'i');
+/**
+ * After the end of a range whose zone is on the first end only: the end
+ * carries a label of its own ("5:00 PM local", "5 PM BRT"), so the first
+ * end's zone may not apply to it.
+ */
+const OWN_LABEL_AFTER = /^\s*\(?\s*(?:local|your\s+time|[A-Z]{2,5})(?![A-Za-z])/;
+/** At most this much time between the ends of a range whose end was moved to the next day. */
+const OVERNIGHT_MAX = 12 * 3_600_000;
 /** Words and marks that join the items of a list ("1:30 or 3:00", "1:30/3:00"). */
 const LIST_WORD = '(?:and|or|&|/|,)';
 
@@ -191,6 +215,8 @@ function addDays(f: Fields, days: number): Fields & { weekday: number } {
 
 const weekdayIndex = (text: string) => WEEKDAYS.findIndex((w) => w.startsWith(text.slice(0, 3)));
 const secondsOfDay = (f: Fields) => f.hour * 3600 + f.minute * 60 + f.second;
+const DATE_PARTS = new Set<PartType>(['wd', 'mon', 'monnum', 'day', 'year']);
+const partOf = (c: Candidate, type: PartType) => c.parts.find((p) => p.type === type);
 
 interface Candidate {
   text: string;
@@ -203,22 +229,44 @@ interface Candidate {
   zoneToken: string | undefined;
   hasDate: boolean;
   hasWeekday: boolean;
+  /**
+   * No zone, and not convertible on its own (no meridiem or no site default):
+   * kept only as an end of a range that shares a zone ("1:30" in "1:30–3:00 PM UTC").
+   */
+  bare: boolean;
   /** The candidate must be left alone; so must every candidate it is linked to. */
   drop: boolean;
   /** How this candidate joins the one before it, when it is a later end of a range or item of a list. */
   link?: 'range' | 'list';
+  /** On the start of a range converted as one unit: where its zone comes from. */
+  unit?: Unit;
 }
 
 /**
- * Re-render the matched text for `epochMs` in the target zone, keeping its format.
- * `markerDate` is the source date a day marker is measured from, or null for no marker.
+ * A range converted as one unit, by where its zone is written: on each end
+ * with the same label ("11 PM UTC – 1 AM UTC"), on the first end only
+ * ("9:00 AM UTC to 5:00 PM"), after the end ("1:30–3:00 PM UTC"), or nowhere,
+ * under a site default ("7 PM–9 PM").
  */
-function render(
+type Unit = 'each' | 'first' | 'last' | 'default';
+
+const dayMarker = (days: number) =>
+  ` (${days > 0 ? '+' : '−'}${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'})`;
+
+/**
+ * Re-render the text of `c` between `from` and `to` for `epochMs` in the target
+ * zone, keeping its format. `twelve`: the hour is on a 12-hour clock.
+ * `afterTime` is inserted after the last part of the time itself.
+ */
+function renderSpan(
   c: Candidate,
+  from: number,
+  to: number,
   epochMs: number,
-  markerDate: Fields | null,
   targetZone: string,
-): { text: string; dayShift: number } {
+  twelve: boolean,
+  afterTime = '',
+): string {
   const target: ZoneRef = { kind: 'iana', id: targetZone };
   const t = fieldsAt(target, epochMs);
   const has = (type: PartType) => c.parts.some((p) => p.type === type);
@@ -241,7 +289,6 @@ function render(
       case 'year':
         return String(t.year);
       case 'hour': {
-        const twelve = has('mer');
         const value = twelve ? t.hour % 12 || 12 : t.hour;
         // Mirror the original: "01" and 24-hour "13" stay two digits, "1" stays one.
         const padded = p.text.length === 2 && (p.text[0] === '0' || !twelve);
@@ -272,32 +319,45 @@ function render(
   };
 
   let out = '';
-  let pos = c.start;
+  let pos = from;
   for (const p of c.parts) {
+    if (p.start < from || p.end > to) continue;
     out += c.text.slice(pos, p.start) + renderPart(p);
-    // Zone-less source text: name the zone the result is in.
-    if (p === lastTimePart && !c.zoneToken) out += ` ${shortZoneName(targetZone, epochMs)}`;
+    if (p === lastTimePart) out += afterTime;
     pos = p.end;
   }
-  out += c.text.slice(pos, c.end);
-
-  let dayShift = 0;
-  if (markerDate) {
-    dayShift = daysBetween(markerDate, t);
-    if (dayShift !== 0) {
-      const marker = ` (${dayShift > 0 ? '+' : '−'}${Math.abs(dayShift)} day${Math.abs(dayShift) === 1 ? '' : 's'})`;
-      out += marker;
-    }
-  }
-  return { text: out, dayShift };
+  return out + c.text.slice(pos, to);
 }
 
-/** Source wall-clock fields for a candidate, given "today" in the source zone. */
-function sourceFields(c: Candidate, today: Fields & { weekday: number }): Fields | null {
+/**
+ * Re-render a single time for `epochMs` in the target zone, keeping its format.
+ * `markerDate` is the source date a day marker is measured from, or null for no marker.
+ */
+function render(
+  c: Candidate,
+  epochMs: number,
+  markerDate: Fields | null,
+  targetZone: string,
+): { text: string; dayShift: number } {
+  // Zone-less source text: name the zone the result is in.
+  const zoneName = c.zoneToken ? '' : ` ${shortZoneName(targetZone, epochMs)}`;
+  let text = renderSpan(c, c.start, c.end, epochMs, targetZone, partOf(c, 'mer') !== undefined, zoneName);
+  let dayShift = 0;
+  if (markerDate) {
+    dayShift = daysBetween(markerDate, fieldsAt({ kind: 'iana', id: targetZone }, epochMs));
+    if (dayShift !== 0) text += dayMarker(dayShift);
+  }
+  return { text, dayShift };
+}
+
+/**
+ * Source wall-clock fields for a candidate, given "today" in the source zone.
+ * `mer` stands in for a meridiem the candidate does not write itself.
+ */
+function sourceFields(c: Candidate, today: Fields & { weekday: number }, mer = partOf(c, 'mer')?.text): Fields | null {
   const get = (type: PartType) => c.parts.find((p) => p.type === type)?.text;
 
   let hour = Number(get('hour'));
-  const mer = get('mer');
   if (mer) {
     if (hour < 1 || hour > 12) return null;
     hour = (hour % 12) + (mer[0]!.toLowerCase() === 'p' ? 12 : 0);
@@ -358,37 +418,42 @@ function labelOffsets(label: ResolvedZone, instants: number[]): number[] {
 function collectCandidates(text: string, allowZoneless: boolean, now: number): Candidate[] {
   const out: Candidate[] = [];
   let prevEnd = 0;
+  let lastEnd = 0;
   const year = new Date(now).getUTCFullYear();
   const seasons = [Date.UTC(year, 0, 15), Date.UTC(year, 6, 15)];
   const anchors = new RegExp(ANCHOR, 'dg');
+  const reread = (m: RegExpExecArray, source: string): RegExpExecArray => {
+    const plain = new RegExp(source, 'dy');
+    plain.lastIndex = m.index;
+    const p = plain.exec(text);
+    if (!p) return m;
+    anchors.lastIndex = p.index + p[0].length;
+    return p;
+  };
+  // A time needs minutes or a meridiem, except as the start of a range ("1-3 PM UTC").
+  const notATime = (m: RegExpExecArray) => {
+    const g = m.groups!;
+    return !g.minute && !g.mer && (g.zone !== undefined || g.isoz !== undefined || !HOUR_START.test(text.slice(m.index + m[0].length)));
+  };
   for (let m = anchors.exec(text); m; m = anchors.exec(text)) {
     // "9:00 GMT-10:00 GMT": the label can never have the offset, so with a
-    // hyphen this is a range. (With "+" or "−" it is an offset with a wrong
-    // label, which fails when converted.)
+    // minus sign this is a range; so is "12:00 UTC-13:00", whose offset is out
+    // of range. (With "+" it is an offset with a wrong label, which fails
+    // when converted.)
     const zone = m.groups!.zone;
-    const resolved = zone ? resolveZone(zone) : null;
-    if (resolved?.label && /^(?:UTC|GMT)\s?-/.test(zone!) && primaryOffset(resolved) !== undefined) {
-      if (!labelOffsets(resolved.label, seasons).includes(primaryOffset(resolved)!)) {
-        const plain = new RegExp(ANCHOR_NO_OFFSET, 'dy');
-        plain.lastIndex = m.index;
-        const p = plain.exec(text);
-        if (p) {
-          m = p;
-          anchors.lastIndex = p.index + p[0].length;
-        }
+    if (zone && /^(?:UTC|GMT)\s?[-−]/.test(zone)) {
+      const resolved = resolveZone(zone);
+      const offset = resolved ? primaryOffset(resolved) : undefined;
+      if (!resolved || (resolved.label && offset !== undefined && !labelOffsets(resolved.label, seasons).includes(offset))) {
+        m = reread(m, ANCHOR_NO_OFFSET);
       }
     }
-    const g = m.groups!;
-    if (!g.minute && !g.mer) continue;
-    if (!g.zone && !g.isoz && !(allowZoneless && g.mer)) continue;
+    if (notATime(m)) continue;
     const timeStart = m.index;
-    const timeEnd = timeStart + m[0].length;
-    let start = timeStart;
-    let end = timeEnd;
-    if (start < prevEnd) continue;
-    const parts = partsOf(m, 0);
+    if (timeStart < lastEnd) continue;
 
     // Date before the time.
+    let start = timeStart;
     const leftBase = Math.max(prevEnd, start - LEFT_WINDOW);
     const leftText = text.slice(leftBase, start);
     let dateMatch: RegExpExecArray | null = null;
@@ -396,17 +461,27 @@ function collectCandidates(text: string, allowZoneless: boolean, now: number): C
       dateMatch = re.exec(leftText);
       if (dateMatch) break;
     }
-    if (dateMatch) {
-      start = leftBase + dateMatch.index;
-      parts.unshift(...partsOf(dateMatch, leftBase));
-    }
+    if (dateMatch) start = leftBase + dateMatch.index;
 
     // A numeric offset glued to the time ("10:30-11:30" is far more often a
     // range) is only trusted in a full ISO timestamp.
-    if (g.isoz && g.isoz !== 'Z') {
+    const { isoz, second } = m.groups!;
+    if (isoz && isoz !== 'Z') {
       const isoDate = dateMatch?.groups?.monnum;
-      if (!isoDate || !(dateMatch!.groups!.isosep === 'T' || g.second)) continue;
+      if (!isoDate || !(dateMatch!.groups!.isosep === 'T' || second)) {
+        m = reread(m, ANCHOR_NO_ISO);
+        if (notATime(m)) continue;
+      }
     }
+    const g = m.groups!;
+    const zoned = g.zone !== undefined || g.isoz !== undefined;
+    const bare = !zoned && !(allowZoneless && g.mer);
+    // "Nov 12–14": a day, not an hour.
+    if (bare && !g.minute && !g.mer && MONTH_BEFORE.test(text.slice(Math.max(0, timeStart - 12), timeStart))) continue;
+    const timeEnd = timeStart + m[0].length;
+    let end = timeEnd;
+    const parts = partsOf(m, 0);
+    if (dateMatch) parts.push(...partsOf(dateMatch, leftBase));
 
     // Date after the time, unless another time follows it ("1 PM UTC – Fri 2 AM UTC").
     const openParen = (m[0].match(/\(/g)?.length ?? 0) > (m[0].match(/\)/g)?.length ?? 0);
@@ -439,11 +514,59 @@ function collectCandidates(text: string, allowZoneless: boolean, now: number): C
       zoneToken: g.zone ?? g.isoz,
       hasDate: parts.some((p) => p.type === 'day'),
       hasWeekday: parts.some((p) => p.type === 'wd'),
+      bare,
       drop: false,
     });
-    prevEnd = end;
+    // A bare time may still be dropped, so it does not end the window a later date is looked for in.
+    if (!bare) prevEnd = end;
+    lastEnd = end;
   }
   return out;
+}
+
+/**
+ * Keep a bare time only where it can be an end of a range that shares a zone:
+ * next to another time across a range dash, "to" or "until".
+ */
+function keepRangeEnds(text: string, cands: Candidate[]): Candidate[] {
+  const joined = (a: Candidate | undefined, b: Candidate | undefined) => {
+    if (!a || !b) return false;
+    const gap = text.slice(a.end, b.start);
+    return gap.length <= GAP_MAX && SHARED_GAP.test(gap);
+  };
+  return cands.filter((c, i) => !c.bare || joined(cands[i - 1], c) || joined(c, cands[i + 1]));
+}
+
+/**
+ * How the ends of a two-ended range are converted: as one unit (and where its
+ * zone comes from), end by end ('ends': each end has its own zone and they
+ * differ, or an ISO timestamp), or not at all (null).
+ */
+function unitOf(text: string, a: Candidate, b: Candidate): Unit | 'ends' | null {
+  const iso = partOf(a, 'monnum') || partOf(b, 'monnum');
+  const dateAfter = (c: Candidate) => c.parts.some((p) => DATE_PARTS.has(p.type) && p.start >= c.timeEnd);
+  if (a.zoneToken && b.zoneToken) {
+    // ISO timestamps never join a range.
+    return a.zoneToken === b.zoneToken && !iso && !dateAfter(a) ? 'each' : 'ends';
+  }
+  if (!SHARED_GAP.test(text.slice(a.end, b.start))) return null;
+  // Not yet: an ISO date before the range, a date before the end only, or a date after the range.
+  if (iso || dateAfter(a) || dateAfter(b)) return null;
+  if ((b.hasDate || b.hasWeekday) && !(a.hasDate || a.hasWeekday)) return null;
+  const aMer = partOf(a, 'mer');
+  const bMer = partOf(b, 'mer');
+  const minutes = partOf(a, 'minute') && partOf(b, 'minute');
+  if (a.zoneToken) {
+    // "9 AM UTC – 5 PM BRT": the end has a label of its own.
+    if (OWN_LABEL_AFTER.test(text.slice(b.end, b.end + 16))) return null;
+    return (aMer && bMer) || (!aMer && !bMer && minutes) ? 'first' : null;
+  }
+  // No zone on either end, and no site default for the end.
+  if (!b.zoneToken && b.bare) return null;
+  // A meridiem on the start only ("9 AM–17:00 UTC"); a 24-hour range needs minutes on both ends.
+  if (aMer && !bMer) return null;
+  if (!bMer && !minutes) return null;
+  return b.zoneToken ? 'last' : 'default';
 }
 
 /**
@@ -463,6 +586,18 @@ function applyGuards(text: string, cands: Candidate[]): void {
     }
   }
 
+  // A two-ended range may share a zone between its ends; any other range or
+  // list needs a zone on every end ("1:30 or 3:00 PM UTC" is left alone).
+  forEachGroup(cands, (group) => {
+    if (group.length === 2 && group[1]!.link === 'range') {
+      const unit = unitOf(text, group[0]!, group[1]!);
+      if (unit === null) for (const c of group) c.drop = true;
+      else if (unit !== 'ends') group[0]!.unit = unit;
+    } else if (group.length > 1 && group.some((c) => !c.zoneToken)) {
+      for (const c of group) c.drop = true;
+    }
+  });
+
   for (let i = 0; i < cands.length; i++) {
     const c = cands[i]!;
     const prev = cands[i - 1];
@@ -474,11 +609,7 @@ function applyGuards(text: string, cands: Candidate[]): void {
     const beforeTime = text.slice(Math.max(prev?.end ?? 0, c.timeStart - CONTEXT), c.timeStart);
     const drop = () => (c.drop = true);
 
-    // Ranges and lists: every end needs its own zone ("7 PM–9 PM" under a
-    // site default, "1:30 or 3:00 PM UTC" are left alone).
-    if (c.link) {
-      if (!c.zoneToken || !prev!.zoneToken) drop();
-    } else {
+    if (!c.link) {
       const before24 = text.slice(Math.max(prev?.end ?? 0, c.start - 24), c.start);
       if (RANGE_BEFORE.test(before24)) drop();
       // Wider: "midnight Eastern Standard Time until " is 37 characters.
@@ -508,10 +639,17 @@ function applyGuards(text: string, cands: Candidate[]): void {
   }
 
   // A range or list is converted whole or not at all.
+  forEachGroup(cands, (group) => {
+    if (group.some((c) => c.drop)) for (const c of group) c.drop = true;
+  });
+}
+
+/** Each range or list (or single time): a candidate and the ones linked after it. */
+function forEachGroup(cands: Candidate[], fn: (group: Candidate[]) => void): void {
   for (let i = 0; i < cands.length; ) {
     let j = i + 1;
     while (j < cands.length && cands[j]!.link) j++;
-    if (cands.slice(i, j).some((c) => c.drop)) for (let k = i; k < j; k++) cands[k]!.drop = true;
+    fn(cands.slice(i, j));
     i = j;
   }
 }
@@ -683,6 +821,194 @@ function convertOne(
   };
 }
 
+/** Both ends of a range, read under one reading of its zone. */
+interface RangeReading {
+  reading: ZoneReading;
+  start: Fields;
+  end: Fields;
+  epochMs: number;
+  endEpochMs: number;
+}
+
+/** The meridiem a start without one takes from the end: "11–1 PM" is 11 AM–1 PM, "10–11 PM" 10–11 PM. */
+function startMeridiem(a: Candidate, b: Candidate, endMer: string): string {
+  const pm = endMer[0]!.toLowerCase() === 'p';
+  const wall = (c: Candidate, pm: boolean) =>
+    ((Number(partOf(c, 'hour')!.text) % 12) + (pm ? 12 : 0)) * 60 + Number(partOf(c, 'minute')?.text ?? 0);
+  return wall(a, pm) > wall(b, pm) ? (pm ? 'am' : 'pm') : endMer;
+}
+
+/**
+ * Render a range converted as one unit. Each end renders as a single time
+ * would; what is written once is repeated on the start only when it no longer
+ * fits both ends, and a time-only range gets one day marker, for the start's day.
+ */
+function renderRange(
+  a: Candidate,
+  b: Candidate,
+  unit: Unit,
+  twelve: boolean,
+  r: RangeReading,
+  ctx: Context,
+): { text: string; dayShift: number } {
+  const tz = ctx.targetZone;
+  const startAt = fieldsAt(ctx.target, r.epochMs);
+  const endAt = fieldsAt(ctx.target, r.endEpochMs);
+  const sameDate = daysBetween(startAt, endAt) === 0;
+
+  // The meridiem or zone written on the end only, repeated on the start when it differs there.
+  let startExtra = '';
+  if (unit === 'last' || unit === 'default') {
+    const aMer = partOf(a, 'mer');
+    const bMer = partOf(b, 'mer');
+    const numberEnd = [...b.parts].reverse().find((p) => ['hour', 'minute', 'second'].includes(p.type))!.end;
+    const merText = bMer && !aMer ? renderSpan(b, numberEnd, bMer.end, r.epochMs, tz, true) : '';
+    const merDiffers = merText !== '' && startAt.hour < 12 !== endAt.hour < 12;
+    if (shortZoneName(tz, r.epochMs) !== shortZoneName(tz, r.endEpochMs)) {
+      if (unit === 'default') startExtra = `${merText} ${shortZoneName(tz, r.epochMs)}`;
+      else {
+        const zone = (partOf(b, 'zone') ?? partOf(b, 'isoz'))!;
+        const from = aMer && bMer ? bMer.end : numberEnd;
+        const paren = b.text[zone.end] === ')' && b.text.slice(from, zone.start).includes('(') ? 1 : 0;
+        startExtra = renderSpan(b, from, zone.end + paren, r.epochMs, tz, true);
+      }
+    } else if (merDiffers) startExtra = merText;
+  }
+  const start = renderSpan(a, a.start, a.end, r.epochMs, tz, twelve, startExtra);
+  // The zone written on the start only, repeated on the end when it differs there.
+  let endZone = unit === 'default' ? ` ${shortZoneName(tz, r.endEpochMs)}` : '';
+  if (unit === 'first' && shortZoneName(tz, r.epochMs) !== shortZoneName(tz, r.endEpochMs)) {
+    const zone = (partOf(a, 'zone') ?? partOf(a, 'isoz'))!;
+    const from = partOf(a, 'mer')?.end ?? [...a.parts].reverse().find((p) => ['hour', 'minute', 'second'].includes(p.type))!.end;
+    const paren = a.text[zone.end] === ')' && a.text.slice(from, zone.start).includes('(') ? 1 : 0;
+    endZone = renderSpan(a, from, zone.end + paren, r.endEpochMs, tz, true);
+  }
+  const end = renderSpan(b, b.start, b.end, r.endEpochMs, tz, partOf(b, 'mer') !== undefined, endZone);
+
+  // A date written on the start only is written on the end too when the ends land on different dates.
+  const aDated = a.hasDate || a.hasWeekday;
+  const bDated = b.hasDate || b.hasWeekday;
+  const endDate = aDated && !bDated && !sameDate ? renderSpan(a, a.start, a.timeStart, r.endEpochMs, tz, false) : '';
+
+  let dayShift = 0;
+  let afterStart = '';
+  let afterEnd = '';
+  if (!aDated && !bDated) {
+    dayShift = daysBetween(r.start, startAt);
+    // After the start when the range crosses midnight, so it cannot be read as the end's.
+    if (dayShift !== 0) (sameDate ? (afterEnd = dayMarker(dayShift)) : (afterStart = dayMarker(dayShift)));
+  }
+  return { text: start + afterStart + a.text.slice(a.end, b.start) + endDate + end + afterEnd, dayShift };
+}
+
+/**
+ * Convert a two-ended range as one unit: one zone reading for both ends, both
+ * converted or neither. Null when it cannot be read with confidence or is
+ * already in the reader's zone at both ends.
+ */
+function convertRange(a: Candidate, b: Candidate, unit: Unit, ctx: Context): Conversion | null {
+  const flags: Flag[] = [];
+  let primary: ZoneReading;
+  let region: string | undefined;
+  let otherMeanings: ZoneReading[] = [];
+  let label: ResolvedZone | undefined;
+  const token = unit === 'first' ? a.zoneToken : unit === 'default' ? undefined : b.zoneToken;
+  if (token) {
+    const resolved = resolveZone(token);
+    if (!resolved) return null;
+    label = resolved.label;
+    ({ primary, region } = resolved);
+    otherMeanings = resolved.alternatives;
+  } else {
+    primary = { ref: { kind: 'iana', id: ctx.defaultZone! }, description: `${ctx.defaultZone} (site default)` };
+    flags.push('assumed-zone');
+  }
+
+  const endMer = partOf(b, 'mer')?.text;
+  let startMer = partOf(a, 'mer')?.text;
+  if (!startMer && endMer && (unit === 'last' || unit === 'default')) startMer = startMeridiem(a, b, endMer);
+  const aDated = a.hasDate || a.hasWeekday;
+  const bDated = b.hasDate || b.hasWeekday;
+  // "1:30 PM UTC – 3:00 PM UTC on Friday": the start has no date of its own.
+  if (bDated && !aDated) return null;
+
+  // The start falls on its date, or today in the source zone. The end falls on
+  // its own date, or else is the next time that clock reading comes after the start.
+  const read = (reading: ZoneReading): RangeReading | null => {
+    const today = fieldsAt(reading.ref, ctx.now);
+    const start = sourceFields(a, today, startMer);
+    if (!start) return null;
+    let end = sourceFields(b, bDated ? today : addDays(start, 0), endMer);
+    if (!end) return null;
+    const overnight = !bDated && secondsOfDay(end) <= secondsOfDay(start);
+    if (overnight) end = addDays(end, 1);
+    const epochMs = toEpoch(reading.ref, start);
+    const endEpochMs = toEpoch(reading.ref, end);
+    if (endEpochMs <= epochMs || (overnight && endEpochMs - epochMs > OVERNIGHT_MAX)) return null;
+    return { reading, start, end, epochMs, endEpochMs };
+  };
+
+  let chosen = read(primary);
+  if (!chosen) return null;
+  const others: RangeReading[] = [];
+  const instants = (r: RangeReading) => [r.epochMs, r.endEpochMs];
+
+  // "UTC+5:30 IST": the label must have the written offset at both ends.
+  const written = primaryOffset({ primary, alternatives: [] });
+  if (label && instants(chosen).some((t) => !labelOffsets(label, [t]).includes(written!))) return null;
+
+  // "EST" on a date its region observes EDT: offer both readings, if both ends agree.
+  if (region && primary.ref.kind === 'fixed') {
+    const regionRef: ZoneRef = { kind: 'iana', id: region };
+    const [startOff, endOff] = instants(chosen).map((t) => offsetAt(regionRef, t) !== written);
+    if (startOff !== endOff) return null;
+    const regional = startOff ? read({ ref: regionRef, description: `local time in ${region}` }) : null;
+    if (regional && regional.epochMs !== chosen.epochMs) {
+      flags.push('season-mismatch');
+      if (ctx.seasonMismatch === 'regional') {
+        others.push({ ...chosen, reading: { ...primary, description: `${primary.description}, taken literally` } });
+        chosen = regional;
+      } else {
+        others.push(regional);
+      }
+    }
+  }
+
+  for (const meaning of otherMeanings) {
+    const alt = read(meaning);
+    if (alt && alt.epochMs !== chosen.epochMs) {
+      if (!flags.includes('ambiguous-zone')) flags.push('ambiguous-zone');
+      others.push(alt);
+    }
+  }
+
+  // Already in the reader's zone at both ends: nothing to convert.
+  const ref = chosen.reading.ref;
+  if (instants(chosen).every((t) => offsetAt(ref, t) === offsetAt(ctx.target, t))) return null;
+
+  if (!a.hasDate && !b.hasDate) flags.push('time-only');
+  const twelve = startMer !== undefined;
+  const rendered = renderRange(a, b, unit, twelve, chosen, ctx);
+  return {
+    index: a.start,
+    length: b.end - a.start,
+    original: a.text.slice(a.start, b.end),
+    converted: rendered.text,
+    epochMs: chosen.epochMs,
+    endEpochMs: chosen.endEpochMs,
+    sourceDescription: chosen.reading.description,
+    confidence: flags.includes('ambiguous-zone') || flags.includes('season-mismatch') ? 'low' : 'high',
+    flags,
+    alternatives: others.map((o) => ({
+      description: o.reading.description,
+      epochMs: o.epochMs,
+      converted: renderRange(a, b, unit, twelve, o, ctx).text,
+    })),
+    format: 'text',
+    dayShift: rendered.dayShift,
+  };
+}
+
 /**
  * Find every date/time in `text` that can be converted to the target zone.
  * Returns no conversions when `targetZone` is not a valid IANA zone.
@@ -698,16 +1024,18 @@ export function findConversions(text: string, options: ConvertOptions = {}): Con
     seasonMismatch: options.seasonMismatch ?? 'regional',
   };
 
-  const cands = collectCandidates(text, ctx.defaultZone !== undefined, ctx.now);
+  const cands = keepRangeEnds(text, collectCandidates(text, ctx.defaultZone !== undefined, ctx.now));
   applyGuards(text, cands);
 
   const results: Conversion[] = [];
-  for (let i = 0; i < cands.length; ) {
-    let j = i + 1;
-    while (j < cands.length && cands[j]!.link) j++;
-    const group = cands.slice(i, j);
-    i = j;
-    if (group[0]!.drop) continue;
+  forEachGroup(cands, (group) => {
+    if (group[0]!.drop) return;
+    const unit = group[0]!.unit;
+    if (unit) {
+      const range = convertRange(group[0]!, group[1]!, unit, ctx);
+      if (range) results.push(range);
+      return;
+    }
 
     // Every end must be readable, or none is converted.
     const converted: Conversion[] = [];
@@ -723,7 +1051,7 @@ export function findConversions(text: string, options: ConvertOptions = {}): Con
       prev = r.state;
     }
     if (ok) results.push(...converted);
-  }
+  });
   return results;
 }
 

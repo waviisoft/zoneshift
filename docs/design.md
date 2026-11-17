@@ -37,22 +37,38 @@
 
 **Ranges and lists**
 
-- A range ("1:30 PM UTC – 3:00 PM UTC", "9 AM UTC-10 AM UTC") or list
-  ("1:30 PM UTC or 3:00 PM UTC", "3 PM ET / 12 PM PT") is converted only when
-  every end carries its own zone, and then whole or not at all: if one end
-  cannot be read, none is converted.
-- Ranges and lists where only the last end has a zone ("1:30–3:00 PM UTC",
-  "between 1:30 PM and 3:00 PM UTC", "1:30 or 3:00 PM UTC", "1:30/3:00 PM UTC",
-  "9 till 5 PM ET") are left alone, and so are zone-less ranges under a site
-  default ("7 PM–9 PM") and ranges with an end the engine does not read as a
-  time ("9 AM ET to noon", "noon UTC – 3 PM UTC", "9 PM ET – midnight ET";
-  also "midday", in any case, with or without a zone after the word).
+- A range or list is converted whole or not at all: if one end cannot be
+  read, none is converted.
+- Two times joined by `-`, `–`, `—`, `−` (any spaces), `to` or `until` form one
+  range even when the zone is written once: after the end ("1:30–3:00 PM UTC"),
+  on the first end only ("9:00 AM UTC to 5:00 PM", unless the end has a label of
+  its own: "5 PM local", "5 PM BRT"), or nowhere, under a site default
+  ("7 PM–9 PM"; the end needs a meridiem). A meridiem on the end only is taken
+  by the start unless the start would then be later on the clock ("11–1 PM" is
+  11 AM–1 PM, "10–11 PM" is 10–11 PM). 24-hour ranges need minutes on both
+  ends; a meridiem on the start only, or mixed 12/24-hour, is left alone. A
+  date or weekday may come before the start, or before each end; an ISO date
+  before the range, a date before the end only, or one after the range is left
+  alone.
+- A range whose ends each carry the same label ("11 PM UTC – 1 AM UTC") is
+  also one unit. Ends with different labels, lists where every item has its
+  own zone ("1:30 PM UTC or 3:00 PM UTC", "3 PM ET / 12 PM PT") and ISO
+  timestamps convert end by end; with different labels a range may also use
+  `through`, `thru`, `till`, `til`, `~` or "between X and Y".
+- Lists sharing one zone ("1:30 or 3:00 PM UTC", "1:30/3:00 PM UTC"),
+  "between 1:30 PM and 3:00 PM UTC", "9 till 5 PM ET", and ranges with an end
+  the engine does not read as a time ("9 AM ET to noon", "noon UTC – 3 PM
+  UTC", "9 PM ET – midnight ET"; also "midday", in any case, with or without a
+  zone after the word) are left alone.
 - Weekday ranges and lists ("Mon–Fri 1 AM UTC", "Sat & Sun",
   "Mon, Wed, Fri at…") are left alone: shifting one named day would mislead.
 - A later end without a date takes the date of the end before it. A range end
   is the first such time after the start, so "Jul 13 11:30 PM UTC – 1:30 AM
-  UTC" ends on 14 July; equal ends, ends more than a day apart, and ranges that
-  run backwards are left alone. When the ends have different labels the end
+  UTC" ends on 14 July. Moved to the next day, it may be at most 12 hours
+  after the start ("7 PM – 7 AM UTC" converts, "6 PM – 7 AM UTC" and "3 PM to
+  1 PM UTC" are left alone), with or without a date on the start. Equal ends,
+  ends more than a day apart, and ranges that run backwards are left alone.
+  When the ends have different labels the end
   must fall after the start on the written date ("Nov 13 9 PM PT – 11 PM ET",
   which would need a 23-hour range, is left alone). A list item takes the same
   date; an item with another label ("11 PM PT / 2 AM ET") takes the date the
@@ -84,14 +100,15 @@
   or `UTC -5`, from UTC−12 to UTC+14. `UTC - 5`, with a hyphen between spaces,
   could be a range and is left alone; a UTC/GMT time is never converted while
   ignoring an offset after it.
-- A plus sign or Unicode minus after UTC/GMT is always an offset, never a range
-  dash. A hyphen followed by digits and a meridiem ("9 AM UTC-10 AM UTC") is a
-  range dash.
+- A plus sign after UTC/GMT is always an offset, never a range dash. A hyphen
+  or Unicode minus followed by a time ("9 AM UTC-10 AM UTC", "2 PM UTC −3 PM
+  UTC") is a range dash, and so is one followed by an offset out of range
+  ("12:00 UTC-13:00"); "14:00 UTC −5" and "10:00 UTC-10" are offsets.
 - An offset followed by a zone label ("14:00 UTC+5:30 IST", "9:00 GMT-10:00
   HST") is converted once, at the written offset, when the label has that
   offset at that instant; the label is replaced with the reader's zone. If the
-  label can never have that offset and the sign is a hyphen ("9:00 GMT-10:00
-  GMT"), it is read as a range. Otherwise ("3:00 PM UTC+01:00 PST", or
+  label can never have that offset and the sign is a hyphen or Unicode minus
+  ("9:00 GMT-10:00 GMT"), it is read as a range. Otherwise ("3:00 PM UTC+01:00 PST", or
   "UTC-04:00 ET" in winter) it is left alone.
 
 **Output**
@@ -100,8 +117,20 @@
   ordinals, padding, punctuation.
 - With a date, the weekday, day, month and year are re-rendered.
 - A time on its own assumes today's date in the source zone and gets
-  `(+1 day)` / `(−1 day)` when the day changes. In a time-only range, each
-  end's marker is measured from the day the range starts.
+  `(+1 day)` / `(−1 day)` when the day changes.
+- A range converts as one unit. Each end renders as a single time would, and
+  the separator is kept exactly. What is written once is written on both ends
+  only when it no longer fits both: the start gets its own meridiem when the
+  ends land in different meridiems ("9:30 PM–12:00 AM GMT+9"), its own label
+  when the zone's name differs at the two ends ("1:00 AM PDT–2:00 AM PST"; a
+  label written on the start only is written on the end too: "1:00 AM PDT to
+  2:00 AM PST"), and the end gets its own date, in the start's format, when the ends land on
+  different dates ("Nov 11, 11 PM–Nov 12, 1 AM PST"). Under a site default the
+  zone name is added once, after the end.
+- A time-only range has one day marker, for the start's day: after the whole
+  range, or directly after the start when the converted range crosses
+  midnight ("10 PM (−1 day) – 1 AM PST"). A time-only list, or a range whose
+  ends have different labels, marks each later end against the day it starts.
 - A `Z` time without an ISO date ("10:00Z") is shown with the zone name
   ("02:00 PST"), because a numeric offset glued to it would read as a range.
   Full ISO timestamps keep a numeric offset.
@@ -111,7 +140,11 @@
 
 **Not handled yet**
 
-- Ranges and lists whose ends do not each carry a zone (see above).
+- Range shapes outside the first set: `through`, `thru`, `till`, `til` and
+  "between X and Y" when the zone is written once; mixed 12/24-hour ranges;
+  ranges with a date after them or before the end only; ranges with different
+  labels as one unit.
+- Lists sharing one zone ("9 AM, 1 PM and 5 PM UTC").
 - Numeric dates (`03/04/2026`), two-digit years, all-caps or lower-case month
   names: a time next to one is left alone. A date joined to its time by `·`,
   `•` or `:` (event listings: "Thu, Nov 12 · 7:00 PM EST") is read.
@@ -126,7 +159,7 @@
 
 ## Decoration and popover
 
-- Every recognised time gets a small clock icon after it. The icon is the
+- Every recognised time or range gets one small clock icon after it. The icon is the
   only decoration: the text itself is never underlined or restyled, so it
   cannot clash with the site's own styling. The icon is drawn in CSS (no image)
   and takes the surrounding text size.
@@ -142,7 +175,8 @@
   shadow root:
   - original text and how it was read;
   - alternative readings, one tap to switch (not built yet);
-  - **Show original here** / **Convert to local time** for this one instance;
+  - **Show original here** / **Convert to local time** for this one instance
+    (a whole range);
   - **Convert all times on this page** / **Show all originals on this page**;
   - **This is wrong** (not built yet): wrong zone, not a date/time, wrong
     date, day/month swapped, other, plus free text.

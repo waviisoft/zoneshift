@@ -14,8 +14,16 @@ const to = (zone: string, defaultZone?: string) => (text: string) =>
 const la = to(LA);
 
 describe('a hyphenated range is never read as a UTC offset', () => {
-  it.each(['9 AM UTC-10 AM', 'Open 2 PM GMT-3 PM'])('%s (second end has no zone)', (text) => {
-    expect(la(text)).toBe(text);
+  // Left alone before the time-ranges spec (#11); decision 2 reads the zone on
+  // the first end for both ends.
+  it.each([
+    ['9 AM UTC-10 AM', '1 AM PST-2 AM', Date.UTC(2026, 10, 11, 9)],
+    ['Open 2 PM GMT-3 PM', 'Open 6 AM PST-7 AM', Date.UTC(2026, 10, 11, 14)],
+  ])('%s (second end has no zone) is a range', (text, converted, start) => {
+    expect(la(text)).toBe(converted);
+    const found = findConversions(text, { targetZone: LA, now: NOW });
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ epochMs: start, endEpochMs: start + 3_600_000 });
   });
 
   it('still reads a real offset', () => {
@@ -46,8 +54,21 @@ describe('ranges and lists joined by words or slashes', () => {
 describe('zone-less ranges and lists under a site default zone', () => {
   const ny = to(LA, 'America/New_York');
 
-  it.each(['Open 7 PM–9 PM', 'Open 7 PM to 9 PM', 'Shows at 7 PM or 9 PM', 'Open 7 PM–9 PM ET'])('%s', (text) => {
+  it.each(['Shows at 7 PM or 9 PM'])('%s', (text) => {
     expect(ny(text)).toBe(text);
+  });
+
+  // Left alone before the time-ranges spec (#11); B3 converts zone-less ranges
+  // under a site default, and a range with a zone after its end.
+  it.each([
+    ['Open 7 PM–9 PM', 'Open 4 PM–6 PM PST', true],
+    ['Open 7 PM to 9 PM', 'Open 4 PM to 6 PM PST', true],
+    ['Open 7 PM–9 PM ET', 'Open 4 PM–6 PM PST', false],
+  ])('converts the range %s', (text, converted, assumed) => {
+    expect(ny(text)).toBe(converted);
+    const found = findConversions(text, { targetZone: LA, now: NOW, defaultZone: 'America/New_York' });
+    expect(found).toHaveLength(1);
+    expect(found[0]!.flags.includes('assumed-zone')).toBe(assumed);
   });
 
   it('still converts a single zone-less time', () => {
@@ -149,7 +170,7 @@ describe('a weekday that contradicts its date', () => {
 });
 
 describe('an offset the engine does not read', () => {
-  it.each(['14:00 UTC - 5', '14:00 GMT  +  1', 'Lunch 12:00 UTC-13:00 daily'])('%s', (text) => {
+  it.each(['14:00 UTC - 5', '14:00 GMT  +  1'])('%s', (text) => {
     expect(la(text)).toBe(text);
   });
 
@@ -158,8 +179,14 @@ describe('an offset the engine does not read', () => {
     expect(la('12:00 UTC+14:00')).toBe('14:00 PST (−1 day)');
   });
 
-  it('still converts a hyphenated range of zoned times', () => {
+  it('still converts a hyphenated range of zoned times, as one conversion', () => {
     expect(la('1 PM UTC - 3 PM UTC')).toBe('5 AM PST - 7 AM PST');
+    expect(findConversions('1 PM UTC - 3 PM UTC', { targetZone: LA, now: NOW })).toHaveLength(1);
+  });
+
+  it('reads "UTC-13:00" as a range to 13:00, since −13 is outside the offsets it reads (Decision log, 2026-11-16)', () => {
+    expect(la('Lunch 12:00 UTC-13:00 daily')).toBe('Lunch 04:00 PST-05:00 daily');
+    expect(findConversions('Lunch 12:00 UTC-13:00 daily', { targetZone: LA, now: NOW })).toHaveLength(1);
   });
 });
 
@@ -175,8 +202,9 @@ describe('an offset followed by a label that does not confirm it', () => {
     expect(findConversions(text, { targetZone: LA, now: NOW })).toEqual([]);
   });
 
-  it.each(['2 PM UTC −3 PM UTC', '2 PM UTC+3 PM UTC'])('%s (a sign is not a range dash)', (text) => {
-    expect(la(text)).toBe(text);
+  // A spaced Unicode minus is a range dash, not a sign: see ranges.test.ts (Decision log, 2026-11-16).
+  it('2 PM UTC+3 PM UTC (a plus sign is not a range dash)', () => {
+    expect(la('2 PM UTC+3 PM UTC')).toBe('2 PM UTC+3 PM UTC');
   });
 
   it('does not let a later time take the site default after a sign', () => {
