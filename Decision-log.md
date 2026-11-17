@@ -44,13 +44,14 @@ Full detail: [Time ranges](Spec:-Time-ranges). All seven decisions approved toge
 | Day marker on time-only ranges | One marker, for the start's day |
 | Icons | One per range |
 
-Three gaps the test-writer found in the spec during the build, decided 2026-11-16:
+Four gaps the test-writer found in the spec during the build, decided 2026-11-16:
 
 | Decision | Choice |
 |---|---|
 | `Lunch 12:00 UTC-13:00 daily` | Converts, like any other zoned hyphenated range |
 | Unicode minus as a range dash (`1:30−3:00 PM UTC`) | Treated as a valid range separator; both ends convert |
 | The ≤ 12 h overnight cap when only the start has an explicit date | The cap still applies; no exception for a date on one end only |
+| Spaced Unicode minus as a range dash (`2 PM UTC −3 PM UTC`), which also reads like a `UTC−3` offset | Also a valid range separator; converts the same as the tight form, spacing is cosmetic |
 
 ## Engine (Build)
 
@@ -63,7 +64,7 @@ Full detail: [Conversion rules](Spec:-Conversion-rules). Also written down in `d
 | 2026-11-13 | A time next to a date the engine cannot read (numeric, lower-case or all-caps month, ISO week date) is left alone, not converted as today. | Converting as today gives the wrong daylight-saving offset and leaves a stale date. Numeric dates are [#12](https://github.com/waviisoft/zoneshift/issues/12). |
 | 2026-11-13 | A date joined to its time by `·`, `•` or `:` is read ("Thu, Nov 12 · 7:00 PM EST"). | Common event-listing style. |
 | 2026-11-13 | A year-less date with a weekday takes the nearest year in which the weekday matches; a weekday that contradicts its date is left alone. | "Sat, Jan 9" written in November means next January. |
-| 2026-11-13 | `+` and the Unicode minus are never a range dash. A hyphen after UTC/GMT is an offset unless what follows makes it a second time. An offset may carry its own label ("UTC+5:30 IST") and is read once when they agree. Negative offsets stop at −12. **Overridden 2026-11-16 for the Unicode minus**: the owner decided it is a valid range dash (see [Time ranges](#time-ranges-owner-2026-11-16) above); `+` is unaffected. | "9 AM UTC-10 AM UTC" was read as UTC−10. |
+| 2026-11-13 | `+` and the Unicode minus are never a range dash. A hyphen after UTC/GMT is an offset unless what follows makes it a second time. An offset may carry its own label ("UTC+5:30 IST") and is read once when they agree. Negative offsets stop at −12. **Overridden 2026-11-16 for the Unicode minus**: the owner decided it is a valid range dash, tight or spaced around it, even where the spaced form also reads like a `UTC−3` offset (see [Time ranges](#time-ranges-owner-2026-11-16) above); `+` is unaffected. | "9 AM UTC-10 AM UTC" was read as UTC−10. |
 | 2026-11-13 | A bare Zulu time ("10:00Z") is shown with the zone name; a full ISO timestamp keeps its ISO shape with a numeric offset. | "02:00-08:00" reads like a range. |
 | 2026-11-13 | A site default zone is not applied when a zone is written in words next to the time ("7 PM Pacific", "7 PM London time"). | The default would override what the page says. |
 | 2026-11-13 | A spelled-out standard or daylight name ("Central Standard Time") has no other meanings (it is not offered China Standard Time). It is still flagged, with the literal reading offered, when used in the wrong season. | The full name is not ambiguous, but a wrong-season name is still never silently reinterpreted. |
