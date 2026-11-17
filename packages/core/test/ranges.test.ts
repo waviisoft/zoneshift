@@ -588,6 +588,15 @@ describe('hyphenated ranges of zoned times', () => {
     expect(la('9 AM UTC-10:30 AM UTC')).toBe('1 AM PST-2:30 AM PST');
   });
 
+  it('reads a spaced Unicode minus as a range dash, not as UTC−3 (Decision log, 2026-11-16)', () => {
+    // Converts the same as the tight form; the spacing around the dash is kept as written.
+    expect(la('2 PM UTC −3 PM UTC')).toBe('6 AM PST −7 AM PST');
+    expect(one('2 PM UTC −3 PM UTC')).toMatchObject({
+      epochMs: Date.UTC(2026, 10, 11, 14),
+      endEpochMs: Date.UTC(2026, 10, 11, 15),
+    });
+  });
+
   it('decision 3: gives one conversion when both ends have the same label', () => {
     for (const text of ['9 AM UTC-10 AM UTC', '2 PM UTC-3 PM UTC', '9:00 GMT-10:00 GMT', '9 AM UTC-10:30 AM UTC']) {
       expect(find(text), text).toHaveLength(1);

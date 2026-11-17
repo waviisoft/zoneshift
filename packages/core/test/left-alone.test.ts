@@ -202,8 +202,9 @@ describe('an offset followed by a label that does not confirm it', () => {
     expect(findConversions(text, { targetZone: LA, now: NOW })).toEqual([]);
   });
 
-  it.each(['2 PM UTC −3 PM UTC', '2 PM UTC+3 PM UTC'])('%s (a sign is not a range dash)', (text) => {
-    expect(la(text)).toBe(text);
+  // A spaced Unicode minus is a range dash, not a sign: see ranges.test.ts (Decision log, 2026-11-16).
+  it('2 PM UTC+3 PM UTC (a plus sign is not a range dash)', () => {
+    expect(la('2 PM UTC+3 PM UTC')).toBe('2 PM UTC+3 PM UTC');
   });
 
   it('does not let a later time take the site default after a sign', () => {
